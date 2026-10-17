@@ -1,0 +1,9 @@
+[function]
+id = "{{FUNCTION_ID}}"
+name = "{{FUNCTION_NAME}}"
+project_ref = "{{PROJECT_REF}}"
+domain = "{{FUNCTION_DOMAIN}}"
+language = "python"
+
+[capabilities]
+allowed = []

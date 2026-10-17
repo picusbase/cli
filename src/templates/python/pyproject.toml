@@ -1,0 +1,10 @@
+[project]
+name = "{{FUNCTION_ID}}"
+version = "0.1.0"
+description = "{{FUNCTION_NAME}} - Picus Python Compute Function"
+requires-python = ">=3.11"
+
+# The Picus Python lane runs CPython 3.12 (stdlib only) inside a gVisor
+# sandbox — the guest shim installs no third-party packages, so keep
+# `handler.py` to the standard library.
+dependencies = []

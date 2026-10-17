@@ -1,0 +1,25 @@
+[package]
+name = "picusbase"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+reqwest = { version = "0.11", features = ["json", "multipart", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+dotenv = "0.15"
+tabled = "0.15"
+toml = "1.0.3"
+serde_yaml = "0.9"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+tar = "0.4"
+flate2 = "1"
+walkdir = "2"
+regex = "1"
+tempfile = "3"
