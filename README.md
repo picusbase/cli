@@ -1,252 +1,130 @@
-# Picus CLI
+# picusbase CLI
 
-CLI để scaffold, build, deploy và quản lý domain Compute của Picus. Đây là lớp thao tác developer/operator cho function registry, direct run, background jobs và schedules.
+CLI để scaffold, build, deploy và quản lý Compute Functions trên nền tảng Picus.
 
 ## Cài đặt
 
-### Yêu cầu
-
-- Rust và Cargo đã có trên máy
-
-### Cài đặt từ source
-
 ```bash
-cd picusbase/cli
-cargo install --path .
+curl -sSf https://raw.githubusercontent.com/picusbase/cli/main/install.sh | sh
 ```
 
-Nếu không muốn cài vào `$PATH`, có thể chạy trực tiếp qua Cargo:
+Script tự phát hiện OS/arch và tải binary phù hợp (`macos-aarch64`, `macos-x86_64`, `linux-x86_64`, `linux-aarch64`).
+
+**Build từ source** (cần Rust toolchain):
 
 ```bash
-cargo run -p picus -- <command>
+cargo install --git https://github.com/picusbase/cli.git picusbase
 ```
 
-## Khái niệm nhanh
-
-- Rust hoặc guest WASM lane dùng HTTP ABI v2: `HttpHandler::handle(HttpRequest, ExecutionContext) -> Result<HttpResponse, Error>`
-- `picus init functions` tạo scaffold theo lane tương ứng: Rust `.wasm`, JavaScript source dưới `src/index.mjs`, hoặc Python source dưới `src/handler.py`
-- `picus function run` là lane direct execution tiện lợi cho compatibility/quick smoke test
-- App consumer thực tế như dashboard nên gọi function qua `picus_sdk::functions::FunctionClient`, không qua CLI
-
-## Cấu trúc lệnh
+Kiểm tra sau khi cài:
 
 ```bash
-picus [OPTIONS] <COMMAND> <SUBCOMMAND> [ARGS]
+picusbase --version
 ```
 
-### Tùy chọn toàn cục
-
-- `--url <URL>`: base URL của Compute Control Plane API. Mặc định `http://localhost:4080/api`
-- `--executor-url <URL>`: base URL của HTTP worker route `/functions/<id>/execute`
-- `--project-ref <PROJECT_REF>`: project ref được forward qua header `x-project-ref`
-- `--auth-token <TOKEN>`: Bearer token cho HTTP worker route có auth
-- `--user-id <USER_ID>`: actor user id cho smoke backend lane
-- `--user-role <ROLE>`: actor role cho smoke backend lane
-
-### Config file user-level
-
-CLI hỗ trợ config file tại `~/.config/picus/config.toml`.
-
-Xem giá trị đã lưu và giá trị effective hiện tại:
+## Cấu hình
 
 ```bash
-picus config show
+picusbase config set \
+  --profile default \
+  --default-url https://console.picusbase.com/api \
+  --default-executor-url https://console.picusbase.com \
+  --default-project-ref <project_ref>
+
+picusbase config show
 ```
 
-Ghi default:
-
-```bash
-picus config set \
-	--default-url https://console.picusbase.com/api \
-	--default-executor-url https://console.picusbase.com \
-	--default-project-ref p_8308d170
-```
-
-Thứ tự ưu tiên resolve hiện tại là:
-
-- cờ command line
-- biến môi trường `PICUS_*`
-- config file user-level
-- default local hardcoded
-
-### Lưu ý về tên command
-
-- Command canonical là `function`, `job`, `schedule`
-- Alias plural `functions`, `jobs`, `schedules` vẫn hoạt động để giữ backward compatibility
+Thứ tự ưu tiên resolve: flag CLI → biến môi trường `PICUS_*` → config file → default.
 
 ## Workflow phổ biến
 
-### 1. Scaffold một function mới
+### 1. Scaffold function mới
 
 ```bash
-picus init functions inventory inventory-suppliers --name "Inventory Suppliers"
+picusbase init functions <domain> <function-id> --language javascript --name "My Function"
 ```
 
-CLI scaffold hiện có ba surface:
+Ba lane hỗ trợ:
 
-- `--language rust` hoặc bỏ cờ: tạo `picus.toml`, `Cargo.toml`, `src/lib.rs`, `openapi.yaml`
-- `--language javascript|js`: tạo `picus.toml`, `src/index.mjs`, `openapi.yaml`
-- `--language python|py`: tạo `picus.toml`, `src/handler.py`, `pyproject.toml`, `openapi.yaml`
+| Flag | Lane | File chính |
+|---|---|---|
+| (bỏ trống) hoặc `--language rust` | Rust/Wasm | `src/lib.rs` |
+| `--language javascript` | JavaScript | `src/index.mjs` |
+| `--language python` | Python | `src/handler.py` |
 
-Ví dụ:
+### 2. Build
 
 ```bash
-cd /Users/tiennguyen/Documents/my-project/cybutek/project/picus/picus-erp/functions/inventory
-
-picus init functions inventory inventory-products-list-js \
-	--language javascript \
-	--name "Inventory Products List JS"
-
-picus init functions inventory inventory-products-report-py \
-	--language python \
-	--name "Inventory Products Report Python"
+picusbase function build --path . --release
 ```
 
-`picus init functions` tạo function
-mới dưới current working directory theo mặc định. Flow chuẩn cho business
-function là đứng trong parent dir đích như `picus-erp/functions/<domain>/`, còn
-nếu chạy từ đúng `picus-erp/functions/` root CLI vẫn giữ layout
-`<domain>/<function-id>/`. Ngoài cây ERP này, CLI không tự cập nhật
-`picus-erp/functions/Cargo.toml`.
-
-Build và deploy đi qua cùng lớp adapter: `picus function build` và
-`picus deploy functions` sẽ tự phát hiện lane từ layout của thư mục function.
-
-Lane JavaScript hiện dùng `src/index.mjs` làm authoring source root; CLI sẽ
-normalize source này sang contract bundle active của `javascript-v1`
-(`payload/index.mjs` trong artifact) khi chạy `picus function build` hoặc
-trực tiếp qua `picus bundle js`.
-
-### 2. Build function artifact
-
-Từ thư mục function:
+### 3. Deploy
 
 ```bash
-picus function build --release
+picusbase deploy functions --rebuild
 ```
 
-Hoặc dùng Cargo trực tiếp:
+Deploy nhiều function từ thư mục cha:
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release
+picusbase deploy functions func-a func-b
 ```
 
-Kết quả build phụ thuộc lane:
-
-```text
-Nếu function nằm dưới một parent tên `functions/`: <that-functions-root>/target/...
-Nếu không: <function-dir>/target/...
-
-Ví dụ thường gặp:
-Rust dưới picus-erp/functions/<domain>/<id>: picus-erp/functions/target/wasm32-unknown-unknown/release/<crate_name>.wasm
-```
-
-### 3. Deploy function
-
-Từ thư mục function:
+Upload thủ công artifact đã build:
 
 ```bash
-picus deploy functions
+picusbase function upload \
+  --id my-function \
+  --file ./artifact.tar.gz \
+  --runtime-class javascript-v1
 ```
 
-Deploy nhiều function từ một thư mục cha:
+### 4. Chạy nhanh (smoke test)
 
 ```bash
-picus deploy functions inventory-warehouses inventory-suppliers
+picusbase \
+  --executor-url http://localhost:4396 \
+  --project-ref <project_ref> \
+  --user-id smoke \
+  --user-role authenticated \
+  function run --id <function-id> --params '{"key":"value"}'
 ```
 
-Upload thủ công artifact đã build hoặc package sẵn:
+### 5. Jobs
 
 ```bash
-picus function upload \
-	--id hello-world \
-	--file ./target/wasm32-unknown-unknown/release/hello_world.wasm \
-	--name "Hello World"
+picusbase job create --function-id <function-id> --params '{"key":"value"}'
+picusbase job list
+picusbase job delete --id <job-id>
 ```
 
-`--file` chấp nhận artifact đúng theo lane, ví dụ `.wasm` cho Rust và `.tar.gz`
-cho bundle JavaScript hoặc Python.
-
-### 4. Chạy nhanh một function
+### 6. Schedules
 
 ```bash
-picus \
-	--executor-url http://localhost:4396 \
-	--project-ref p_8308d170 \
-	--user-id smoke-test-operator \
-	--user-role authenticated \
-	function run --id inventory-products-list-js --params '{"page":1,"limit":5}'
+picusbase schedule create \
+  --name "Daily sync" \
+  --cron "0 0 * * *" \
+  --function-id <function-id>
+
+picusbase schedule list
+picusbase schedule delete --id <schedule-id>
 ```
 
-Nếu `--executor-url` được set, CLI sẽ gọi HTTP worker route `POST /functions/<id>/execute` với body params JSON raw. Nếu không có `executor_url`, CLI sẽ fallback về control-plane convenience endpoint cũ `POST /compute/functions/<id>/run` để giữ backward compatibility cho lane cũ.
+## Biến môi trường
 
-Ví dụ trên dùng sample business-parity JavaScript `inventory-products-list-js` hiện có trong repo và bắn vào worker mixed local `http://localhost:4396`.
+| Biến | Mô tả |
+|---|---|
+| `PICUS_URL` | Base URL của API |
+| `PICUS_PROJECT_REF` | Project ref mặc định |
+| `PICUS_EXECUTOR_URL` | URL của HTTP worker |
+| `PICUS_AUTH_TOKEN` | Bearer token |
+| `PICUS_USER_ID` | User ID (dev bypass) |
+| `PICUS_PROFILE` | Profile được chọn |
 
-Quy ước nhanh:
+## Examples
 
-- Dùng `http://localhost:4396` cho worker mixed local phục vụ cả Wasm `wasm-core-v1`, JavaScript và Python.
-- `function run` là smoke/debug surface; app consumer thực tế vẫn nên dùng `picus_sdk::functions::FunctionClient`.
+Thư mục `examples/` chứa sample function minh họa guest ABI:
 
-Raw HTTP tương đương cho cùng sample:
-
-```bash
-curl -sS -X POST http://localhost:4396/functions/inventory-products-list-js/execute \
-	-H 'content-type: application/json' \
-	-H 'x-project-ref: p_8308d170' \
-	-H 'x-picus-user-id: smoke-test-operator' \
-	-H 'x-picus-user-role: authenticated' \
-	-d '{"page":1,"limit":5}'
-```
-
-### 5. Quản lý jobs
-
-Liệt kê jobs:
-
-```bash
-picus job list
-```
-
-Tạo background job:
-
-```bash
-picus job create --function-id hello-world --params '{"action":"process_data"}'
-```
-
-Xóa job:
-
-```bash
-picus job delete --id <JOB_ID>
-```
-
-### 6. Quản lý schedules
-
-Liệt kê schedules:
-
-```bash
-picus schedule list
-```
-
-Tạo schedule:
-
-```bash
-picus schedule create \
-	--name "Sync Data 5m" \
-	--cron "0 */5 * * * *" \
-	--function-id sync-service
-```
-
-Xóa schedule:
-
-```bash
-picus schedule delete --id <SCHEDULE_ID>
-```
-
-## Examples đi kèm
-
-Thư mục `examples/` chứa các sample function đã được cập nhật sang `HttpHandler`:
-
-- `hello-world/`: đọc body JSON và trả về `HttpResponse` đơn giản
-- `calculator/`: parse body input, validate và trả kết quả phép tính
-- `count_error_logs/`: ví dụ guest function dùng `host::query_read_only()`
-
-Các sample này có mục đích minh họa guest ABI v2. Chúng không thay thế pattern app-side function calling qua `picus_sdk::functions`.
+- `hello-world/` — Rust function đơn giản
+- `calculator/` — parse input, trả kết quả phép tính
+- `count_error_logs/` — dùng `host::query_read_only()`
