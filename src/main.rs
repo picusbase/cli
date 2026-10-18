@@ -5,7 +5,9 @@ mod client;
 mod commands;
 mod config;
 mod language;
+mod gen_types;
 mod manifest;
+mod schema_deploy;
 mod web_app;
 
 use anyhow::{Context, Result};
@@ -13,7 +15,8 @@ use clap::Parser;
 use client::{PicusClient, PublishExtras};
 use commands::{
     AppCommands, AppFunctionsCommands, BundleCommands, Cli,
-    ClusterCommands, Commands, ConfigCommands, DeployCommands, DevCommands, DomainCommands, FunctionCommands,
+    ClusterCommands, Commands, ConfigCommands, DataCommands, DeployCommands, DevCommands, DomainCommands, FunctionCommands,
+    GenCommands,
     InitCommands, JobCommands, PlatformCommands, RouteCommands, ScheduleCommands,
 };
 use config::{CliDefaults, CliProfile, PicusConfig};
@@ -1566,9 +1569,38 @@ fn main() -> Result<()> {
                 DomainCommands::Remove { app_code } => web_app::remove_domain(&client, project_ref, &app_code),
             }
         }
+        Commands::Gen(args) => match args.command {
+            GenCommands::Types { path, out } => gen_types::run(&path, &out),
+        },
+        Commands::Data(args) => match args.command {
+            DataCommands::Restore { dir } => {
+                let project_ref = resolved_project_ref.as_deref().context("project_ref is required: --project-ref or PICUS_PROJECT_REF")?;
+                schema_deploy::restore_data(&client, &dir, project_ref)
+            }
+        },
         Commands::Deploy(args) => match args.command {
+            DeployCommands::Schema { path, skip_functions, no_publish, bound_user_id } => {
+                let project_ref = resolved_project_ref.as_deref().context("project_ref is required: --project-ref or PICUS_PROJECT_REF")?;
+                schema_deploy::run(
+                    &client,
+                    &path,
+                    project_ref,
+                    resolved_personal_token.clone(),
+                    schema_deploy::SchemaDeployOptions { skip_functions, no_publish, bound_user_id },
+                )
+            }
             DeployCommands::App { path, domain, skip_build } => {
-                web_app::deploy_app(&client, resolved_project_ref.as_deref(), &path, domain, skip_build)
+                // Explicit --project-ref / PICUS_PROJECT_REF beats picus.app.toml, which beats the profile.
+                let explicit_project_ref = normalize_optional_string(cli.project_ref.clone())
+                    .or_else(|| normalize_optional_string(std::env::var("PICUS_PROJECT_REF").ok()));
+                web_app::deploy_app(
+                    &client,
+                    explicit_project_ref.as_deref(),
+                    resolved_project_ref.as_deref(),
+                    &path,
+                    domain,
+                    skip_build,
+                )
             }
             DeployCommands::Functions {
                 path,

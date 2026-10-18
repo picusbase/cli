@@ -70,6 +70,10 @@ pub enum Commands {
     App(AppArgs),
     /// Custom domains of project Apps (Console → Builder → Apps)
     Domain(DomainArgs),
+    /// Generate code from the bundle (TypeScript types for frontends)
+    Gen(GenArgs),
+    /// Entity record data (restore from SQL dumps)
+    Data(DataArgs),
 
     /// Manage PicusBase platform resources (organizations, projects)
     Platform(PlatformArgs),
@@ -600,6 +604,41 @@ pub enum DevCommands {
 }
 
 #[derive(Parser)]
+pub struct GenArgs {
+    #[command(subcommand)]
+    pub command: GenCommands,
+}
+
+#[derive(Subcommand)]
+pub enum GenCommands {
+    /// TypeScript types + entity metadata from doctypes/ (for frontends)
+    Types {
+        /// Bundle directory (contains doctypes/)
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        /// Output .ts file
+        #[arg(long, default_value = "frontends/shared/src/generated/entities.ts")]
+        out: PathBuf,
+    },
+}
+
+#[derive(Parser)]
+pub struct DataArgs {
+    #[command(subcommand)]
+    pub command: DataCommands,
+}
+
+#[derive(Subcommand)]
+pub enum DataCommands {
+    /// Replace entity records from <dir>/*.sql dumps
+    Restore {
+        /// Directory with <entity>.sql files
+        #[arg(long, default_value = "data")]
+        dir: PathBuf,
+    },
+}
+
+#[derive(Parser)]
 pub struct BundleArgs {
     #[command(subcommand)]
     pub command: BundleCommands,
@@ -783,6 +822,21 @@ pub enum DeployCommands {
         /// --signing-key-path is provided.
         #[arg(long)]
         signer_id: Option<String>,
+    },
+    /// Deploy the data layer of a bundle: doctypes/, roles/, functions/, automations/, ai_agent/
+    Schema {
+        /// Bundle directory (contains doctypes/)
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        /// Skip building/deploying functions/
+        #[arg(long, default_value_t = false)]
+        skip_functions: bool,
+        /// Draft entity versions without publishing them
+        #[arg(long, default_value_t = false)]
+        no_publish: bool,
+        /// Owner (user id) of newly created AI agents (default: the logged-in user)
+        #[arg(long)]
+        bound_user_id: Option<String>,
     },
     /// Build a frontend app (picus.app.toml) and deploy it to its domain
     App {

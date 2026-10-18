@@ -275,6 +275,7 @@ pub fn remove_domain(client: &PicusClient, project_ref: Option<&str>, app_code: 
 
 pub fn deploy_app(
     client: &PicusClient,
+    explicit_project_ref: Option<&str>,
     fallback_project_ref: Option<&str>,
     path: &Path,
     domain_override: Option<String>,
@@ -288,7 +289,9 @@ pub fn deploy_app(
     .with_context(|| format!("Invalid {}", manifest_path.display()))?;
     let code = manifest.app.code;
     validate_code(&code)?;
-    let project_ref = non_empty(manifest.app.project_ref)
+    let project_ref = explicit_project_ref
+        .map(str::to_string)
+        .or_else(|| non_empty(manifest.app.project_ref))
         .or_else(|| fallback_project_ref.map(str::to_string))
         .context("project_ref is required: set [app].project_ref in picus.app.toml or --project-ref")?;
     let existing = client.get_app(&project_ref, &code)?;
@@ -303,7 +306,9 @@ pub fn deploy_app(
         .context("domain is required: set [app].domain in picus.app.toml or pass --domain")?;
 
     if !skip_build {
-        if !path.join("node_modules").exists() {
+        // npm workspaces hoist node_modules to the workspace root.
+        let absolute = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if !absolute.ancestors().any(|dir| dir.join("node_modules").is_dir()) {
             run_shell(path, "npm install")?;
         }
         run_shell(path, &manifest.build.command)?;
@@ -320,7 +325,8 @@ pub fn deploy_app(
     let framework = non_empty(manifest.app.framework).unwrap_or_else(|| "react".to_string());
     if let Some(app) = &existing {
         let existing_framework = app.get("ui_framework").and_then(|v| v.as_str()).unwrap_or("dioxus");
-        if existing_framework != framework {
+        // "dioxus" = legacy app of the removed runtime; it has nothing to serve, so it can be replaced.
+        if existing_framework != framework && existing_framework != "dioxus" {
             bail!("App code '{code}' is already used by a {existing_framework} app in {project_ref} — pick another [app].code");
         }
     }
