@@ -13,7 +13,7 @@ use client::{PicusClient, PublishExtras};
 use commands::{
     AppCommands, AppFunctionsCommands, BundleCommands, Cli,
     ClusterCommands, Commands, ConfigCommands, DeployCommands, DevCommands, FunctionCommands,
-    InitCommands, JobCommands, PlatformCommands, ScheduleCommands,
+    InitCommands, JobCommands, PlatformCommands, RouteCommands, ScheduleCommands,
 };
 use config::{CliDefaults, CliProfile, PicusConfig};
 use language::{adapter_for, detect_language, Language};
@@ -104,6 +104,36 @@ fn resolve_cli_executor_url(
                 .and_then(|profile| normalize_optional_string(profile.executor_url.clone()))
         })
         .or_else(|| normalize_optional_string(defaults.executor_url.clone()))
+}
+
+fn resolve_cli_personal_token(
+    defaults: &CliDefaults,
+    selected_profile: Option<&CliProfile>,
+) -> Option<String> {
+    normalize_optional_string(std::env::var("PICUS_PERSONAL_TOKEN").ok())
+        .or_else(|| {
+            selected_profile
+                .and_then(|profile| normalize_optional_string(profile.personal_token.clone()))
+        })
+        .or_else(|| normalize_optional_string(defaults.personal_token.clone()))
+}
+
+/// Accepts either the function key (picus.toml `id`) or the registry UUID.
+fn resolve_function_uuid(client: &PicusClient, function: &str) -> Result<String> {
+    client
+        .list_compute_functions()?
+        .into_iter()
+        .find(|f| f.function_key == function || f.id == function)
+        .map(|f| f.id)
+        .with_context(|| format!("Function '{}' not found in this project", function))
+}
+
+fn token_state(token: &Option<String>) -> &'static str {
+    if token.is_some() {
+        "<set>"
+    } else {
+        "<unset>"
+    }
 }
 
 fn resolve_cli_auth_token(cli_auth_token: Option<String>) -> Option<String> {
@@ -851,6 +881,7 @@ pub(crate) fn deploy_function_dir(
     entrypoint_override: Option<String>,
     signing_key_path: Option<PathBuf>,
     signer_id: Option<String>,
+    personal_token: Option<String>,
 ) -> Result<()> {
     // We already know picus.toml exists if we reached here
     let config = PicusConfig::load_from_dir(path)?;
@@ -868,7 +899,8 @@ pub(crate) fn deploy_function_dir(
         None,
         None,
         None,
-    );
+    )
+    .with_personal_token(personal_token);
 
     // Keep a single shared target under picus-erp/functions/target even when
     // functions are grouped one level deeper by domain.
@@ -1152,6 +1184,7 @@ fn main() -> Result<()> {
     let resolved_executor_url =
         resolve_cli_executor_url(cli.executor_url.clone(), &cli_defaults, selected_profile);
     let resolved_auth_token = resolve_cli_auth_token(cli.auth_token.clone());
+    let resolved_personal_token = resolve_cli_personal_token(&cli_defaults, selected_profile);
     let resolved_user_id = resolve_cli_user_id(cli.user_id.clone());
     let resolved_user_role = resolve_cli_user_role(cli.user_role.clone());
     let client = PicusClient::new(
@@ -1161,7 +1194,8 @@ fn main() -> Result<()> {
         resolved_auth_token.clone(),
         resolved_user_id.clone(),
         resolved_user_role.clone(),
-    );
+    )
+    .with_personal_token(resolved_personal_token.clone());
 
     match cli.command {
         Commands::Config(args) => match args.command {
@@ -1184,6 +1218,10 @@ fn main() -> Result<()> {
                 println!(
                     "  project_ref = {}",
                     cli_defaults.project_ref.as_deref().unwrap_or("<unset>")
+                );
+                println!(
+                    "  personal_token = {}",
+                    token_state(&cli_defaults.personal_token)
                 );
                 println!("Profiles:");
                 if cli_defaults.profiles.is_empty() {
@@ -1218,6 +1256,10 @@ fn main() -> Result<()> {
                             "      project_ref = {}",
                             profile.project_ref.as_deref().unwrap_or("<unset>")
                         );
+                        println!(
+                            "      personal_token = {}",
+                            token_state(&profile.personal_token)
+                        );
                     }
                 }
                 println!(
@@ -1234,20 +1276,26 @@ fn main() -> Result<()> {
                     "  project_ref = {}",
                     resolved_project_ref.as_deref().unwrap_or("<unset>")
                 );
+                println!(
+                    "  personal_token = {}",
+                    token_state(&resolved_personal_token)
+                );
                 Ok(())
             }
             ConfigCommands::Set {
                 default_url,
                 default_executor_url,
                 default_project_ref,
+                personal_token,
             } => {
                 let target_profile_name = explicit_profile_name.clone();
                 if default_url.is_none()
                     && default_executor_url.is_none()
                     && default_project_ref.is_none()
+                    && personal_token.is_none()
                 {
                     anyhow::bail!(
-                        "Provide at least one of --default-url, --default-executor-url, or --default-project-ref"
+                        "Provide at least one of --default-url, --default-executor-url, --default-project-ref, or --personal-token"
                     );
                 }
 
@@ -1268,6 +1316,10 @@ fn main() -> Result<()> {
                     if let Some(default_project_ref) = default_project_ref {
                         profile.project_ref = normalize_optional_string(Some(default_project_ref));
                     }
+
+                    if let Some(personal_token) = personal_token {
+                        profile.personal_token = normalize_optional_string(Some(personal_token));
+                    }
                 } else {
                     if let Some(default_url) = default_url {
                         next.url = normalize_optional_string(Some(default_url));
@@ -1279,6 +1331,10 @@ fn main() -> Result<()> {
 
                     if let Some(default_project_ref) = default_project_ref {
                         next.project_ref = normalize_optional_string(Some(default_project_ref));
+                    }
+
+                    if let Some(personal_token) = personal_token {
+                        next.personal_token = normalize_optional_string(Some(personal_token));
                     }
                 }
 
@@ -1299,6 +1355,7 @@ fn main() -> Result<()> {
                         "  project_ref = {}",
                         profile.project_ref.as_deref().unwrap_or("<unset>")
                     );
+                    println!("  personal_token = {}", token_state(&profile.personal_token));
                 } else {
                     println!("Updated root defaults:");
                     println!("  url = {}", next.url.as_deref().unwrap_or("<unset>"));
@@ -1310,6 +1367,7 @@ fn main() -> Result<()> {
                         "  project_ref = {}",
                         next.project_ref.as_deref().unwrap_or("<unset>")
                     );
+                    println!("  personal_token = {}", token_state(&next.personal_token));
                 }
                 Ok(())
             }
@@ -1387,8 +1445,13 @@ fn main() -> Result<()> {
                 let root_url = next.url.clone();
                 let root_executor_url = next.executor_url.clone();
                 let root_project_ref = next.project_ref.clone();
+                let root_personal_token = next.personal_token.clone();
 
-                if root_url.is_none() && root_executor_url.is_none() && root_project_ref.is_none() {
+                if root_url.is_none()
+                    && root_executor_url.is_none()
+                    && root_project_ref.is_none()
+                    && root_personal_token.is_none()
+                {
                     anyhow::bail!("Root defaults are already empty. Nothing to migrate.");
                 }
 
@@ -1403,11 +1466,15 @@ fn main() -> Result<()> {
                     if root_project_ref.is_some() {
                         profile.project_ref = root_project_ref.clone();
                     }
+                    if root_personal_token.is_some() {
+                        profile.personal_token = root_personal_token.clone();
+                    }
                 }
 
                 next.url = None;
                 next.executor_url = None;
                 next.project_ref = None;
+                next.personal_token = None;
                 next.default_profile = Some(profile_name.clone());
 
                 let path = next.save()?;
@@ -1458,6 +1525,7 @@ fn main() -> Result<()> {
                         entrypoint,
                         signing_key_path,
                         signer_id,
+                        resolved_personal_token,
                     );
                 }
 
@@ -1487,6 +1555,7 @@ fn main() -> Result<()> {
                             entrypoint.clone(),
                             signing_key_path.clone(),
                             signer_id.clone(),
+                            resolved_personal_token.clone(),
                         ) {
                             eprintln!("❌ Failed to deploy {}: {}", config.function.id, e);
                             functions_failed += 1;
@@ -1609,7 +1678,7 @@ fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
                 FunctionCommands::Delete { id } => {
-                    if client.delete_function(&id)? {
+                    if client.delete_function(&resolve_function_uuid(&client, &id)?)? {
                         println!("Function '{}' deleted successfully.", id);
                     } else {
                         println!("Failed to delete function '{}'.", id);
@@ -1639,6 +1708,36 @@ fn main() -> Result<()> {
                     } else {
                         println!("Failed to delete job '{}'.", id);
                     }
+                }
+            }
+            Ok(())
+        }
+        Commands::Route(args) => {
+            match args.command {
+                RouteCommands::List => {
+                    let bindings = client.list_route_bindings()?;
+                    println!("{}", Table::new(bindings).to_string());
+                }
+                RouteCommands::Bind {
+                    function,
+                    path,
+                    method,
+                    auth_mode,
+                    permissions,
+                } => {
+                    let binding = client.create_route_binding(
+                        path,
+                        method.to_uppercase(),
+                        resolve_function_uuid(&client, &function)?,
+                        Some(auth_mode),
+                        (!permissions.is_empty()).then_some(permissions),
+                        Some("manual".to_string()),
+                    )?;
+                    println!("{}", Table::new(vec![binding]).to_string());
+                }
+                RouteCommands::Delete { id } => {
+                    client.delete_route_binding(&id)?;
+                    println!("Route binding '{}' deleted.", id);
                 }
             }
             Ok(())
@@ -1795,11 +1894,11 @@ fn main() -> Result<()> {
                     println!("  1. Implement handle(request, context) in src/handler.py");
                     println!("  2. Refine request/response schemas in openapi.yaml");
                     println!(
-                        "  3. Build: cd {} && picus function build --path . --release",
+                        "  3. Build: cd {} && picusbase function build --path . --release",
                         function_dir.display()
                     );
                     println!(
-                        "  4. Deploy: cd {} && picus deploy functions --rebuild",
+                        "  4. Deploy: cd {} && picusbase deploy functions --rebuild",
                         function_dir.display()
                     );
                     println!(
@@ -1875,11 +1974,11 @@ fn main() -> Result<()> {
                     println!("  1. Implement the handler in src/index.mjs");
                     println!("  2. Refine request/response schemas in openapi.yaml");
                     println!(
-                        "  3. Validate/package: cd {} && picus function build --release",
+                        "  3. Validate/package: cd {} && picusbase function build --release",
                         function_dir.display()
                     );
                     println!(
-                        "  4. Deploy: cd {} && picus deploy functions --rebuild",
+                        "  4. Deploy: cd {} && picusbase deploy functions --rebuild",
                         function_dir.display()
                     );
 
@@ -1998,7 +2097,7 @@ fn main() -> Result<()> {
                     function_dir.display()
                 );
                 println!(
-                    "  5. Run: cd {} && picus deploy functions --rebuild",
+                    "  5. Run: cd {} && picusbase deploy functions --rebuild",
                     function_dir.display()
                 );
 
@@ -2751,7 +2850,7 @@ fn run_bundle(
         }
     );
     println!(
-        "   Next: picus function upload --id <key> --file {} --runtime-class {} --language {}",
+        "   Next: picusbase function upload --id <key> --file {} --runtime-class {} --language {}",
         artifact.archive_path.display(),
         runtime_class,
         kind.language()

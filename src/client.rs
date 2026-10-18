@@ -38,19 +38,23 @@ pub struct ComputeFunction {
     pub project_ref: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, tabled::Tabled)]
 pub struct RouteBinding {
     pub id: String,
+    #[tabled(skip)]
     pub project_ref: String,
     pub path_pattern: String,
     pub http_method: String,
     pub function_id: String,
+    #[tabled(skip)]
     pub version_id: Option<String>,
+    #[tabled(skip)]
     pub policy_id: Option<String>,
     pub is_active: bool,
     #[serde(default)]
     pub auth_mode: String,
     #[serde(default)]
+    #[tabled(display_with = "display_list")]
     pub required_permissions: Vec<String>,
     #[serde(default)]
     pub source: String,
@@ -120,6 +124,14 @@ fn display_option(o: &Option<String>) -> String {
     o.as_deref().unwrap_or("-").to_string()
 }
 
+fn display_list(items: &[String]) -> String {
+    if items.is_empty() {
+        "-".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
 #[derive(Serialize)]
 struct CreateJobRequest {
     function_id: String,
@@ -181,6 +193,8 @@ pub struct PicusClient {
     auth_token: Option<String>,
     user_id: Option<String>,
     user_role: Option<String>,
+    personal_token: Option<String>,
+    console_token: std::sync::OnceLock<String>,
 }
 
 impl PicusClient {
@@ -200,25 +214,85 @@ impl PicusClient {
             auth_token,
             user_id,
             user_role,
+            personal_token: None,
+            console_token: std::sync::OnceLock::new(),
         }
+    }
+
+    pub fn with_personal_token(mut self, personal_token: Option<String>) -> Self {
+        self.personal_token = personal_token;
+        self
+    }
+
+    /// With a personal access token `base_url` is the Console URL and requests go through
+    /// console-api's authenticated `/platform/projects/:ref/compute` proxy; otherwise straight to
+    /// the Compute Control Plane. `console_path: None` marks an endpoint console-api does not proxy.
+    fn url(&self, cp_path: &str, console_path: Option<&str>) -> Result<String> {
+        if self.personal_token.is_none() {
+            return Ok(format!("{}/compute{}", self.base_url, cp_path));
+        }
+        let console_path = console_path.ok_or_else(|| {
+            anyhow::anyhow!("This command is not available through console-api yet")
+        })?;
+        let project_ref = self.project_ref.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "project_ref is required: --project-ref, PICUS_PROJECT_REF or `picusbase config set --default-project-ref`"
+            )
+        })?;
+        Ok(format!(
+            "{}/platform/projects/{}/compute{}",
+            self.base_url, project_ref, console_path
+        ))
+    }
+
+    fn console_token(&self, personal_token: &str) -> Result<String> {
+        if let Some(token) = self.console_token.get() {
+            return Ok(token.clone());
+        }
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+        }
+
+        let res = self
+            .client
+            .post(format!("{}/api/auth/oauth/token", self.base_url))
+            .json(&serde_json::json!({
+                "grant_type": "personal_access_token",
+                "personal_access_token": personal_token,
+            }))
+            .send()?;
+        if !res.status().is_success() {
+            anyhow::bail!(
+                "Personal access token rejected by {} ({}): token revoked, expired, or wrong --url",
+                self.base_url,
+                res.status()
+            );
+        }
+        let token = res.json::<TokenResponse>()?.access_token;
+        Ok(self.console_token.get_or_init(|| token).clone())
     }
 
     fn request_builder(
         &self,
         method: reqwest::Method,
         url: &str,
-    ) -> reqwest::blocking::RequestBuilder {
+    ) -> Result<reqwest::blocking::RequestBuilder> {
         let mut req = self.client.request(method, url);
         if let Some(ref p_ref) = self.project_ref {
             req = req.header("x-project-ref", p_ref);
         }
-        req
+        if let Some(ref personal_token) = self.personal_token {
+            req = req.bearer_auth(self.console_token(personal_token)?);
+        }
+        Ok(req)
     }
 
     // Functions
     pub fn list_functions(&self) -> Result<Vec<Function>> {
-        let url = format!("{}/compute/registry/functions", self.base_url);
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let url = self.url("/registry/functions", Some("/functions"))?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -240,7 +314,7 @@ impl PicusClient {
         file_path: &Path,
         extras: &PublishExtras,
     ) -> Result<PublishResult> {
-        let url = format!("{}/compute/registry/publish", self.base_url);
+        let url = self.url("/registry/publish", Some("/functions"))?;
 
         let mut form = multipart::Form::new()
             .text("function_key", id)
@@ -276,7 +350,7 @@ impl PicusClient {
         }
 
         let res = self
-            .request_builder(reqwest::Method::POST, &url)
+            .request_builder(reqwest::Method::POST, &url)?
             .multipart(form)
             .send()?;
 
@@ -301,11 +375,11 @@ impl PicusClient {
     }
 
     pub fn activate_version(&self, version_id: &str) -> Result<()> {
-        let url = format!(
-            "{}/compute/registry/versions/{}/activate",
-            self.base_url, version_id
-        );
-        let res = self.request_builder(reqwest::Method::POST, &url).send()?;
+        let url = self.url(
+            &format!("/registry/versions/{version_id}/activate"),
+            Some(&format!("/versions/{version_id}/activate")),
+        )?;
+        let res = self.request_builder(reqwest::Method::POST, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -316,8 +390,8 @@ impl PicusClient {
     }
 
     pub fn delete_function(&self, id: &str) -> Result<bool> {
-        let url = format!("{}/compute/registry/functions/{}", self.base_url, id);
-        let res = self.request_builder(reqwest::Method::DELETE, &url).send()?;
+        let url = self.url(&format!("/registry/functions/{id}"), Some(&format!("/functions/{id}")))?;
+        let res = self.request_builder(reqwest::Method::DELETE, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -362,11 +436,11 @@ impl PicusClient {
             return Ok(res.json()?);
         }
 
-        let url = format!("{}/compute/functions/{}/run", self.base_url, id);
+        let url = self.url(&format!("/functions/{id}/run"), None)?;
         let payload = RunFunctionRequest { params };
 
         let res = self
-            .request_builder(reqwest::Method::POST, &url)
+            .request_builder(reqwest::Method::POST, &url)?
             .json(&payload)
             .send()?;
 
@@ -380,8 +454,8 @@ impl PicusClient {
 
     // Jobs
     pub fn list_jobs(&self) -> Result<Vec<Job>> {
-        let url = format!("{}/compute/jobs", self.base_url);
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let url = self.url("/jobs", Some("/jobs"))?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -392,7 +466,7 @@ impl PicusClient {
     }
 
     pub fn create_job(&self, function_id: String, params: serde_json::Value) -> Result<Job> {
-        let url = format!("{}/compute/jobs", self.base_url);
+        let url = self.url("/jobs", Some("/jobs"))?;
         let payload = CreateJobRequest {
             function_id: function_id.clone(),
             wasm_module: function_id,
@@ -400,7 +474,7 @@ impl PicusClient {
         };
 
         let res = self
-            .request_builder(reqwest::Method::POST, &url)
+            .request_builder(reqwest::Method::POST, &url)?
             .json(&payload)
             .send()?;
 
@@ -413,8 +487,8 @@ impl PicusClient {
     }
 
     pub fn delete_job(&self, id: &str) -> Result<bool> {
-        let url = format!("{}/compute/jobs/{}", self.base_url, id);
-        let res = self.request_builder(reqwest::Method::DELETE, &url).send()?;
+        let url = self.url(&format!("/jobs/{id}"), Some(&format!("/jobs/{id}")))?;
+        let res = self.request_builder(reqwest::Method::DELETE, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -426,8 +500,8 @@ impl PicusClient {
 
     // Schedules
     pub fn list_schedules(&self) -> Result<Vec<JobSchedule>> {
-        let url = format!("{}/compute/schedules", self.base_url);
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let url = self.url("/schedules", None)?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -444,7 +518,7 @@ impl PicusClient {
         function_id: String,
         params: serde_json::Value,
     ) -> Result<String> {
-        let url = format!("{}/compute/schedules", self.base_url);
+        let url = self.url("/schedules", None)?;
         let payload = CreateScheduleRequest {
             name,
             cron_expression: cron,
@@ -464,7 +538,7 @@ impl PicusClient {
     }
 
     pub fn delete_schedule(&self, id: &str) -> Result<bool> {
-        let url = format!("{}/compute/schedules/{}", self.base_url, id);
+        let url = self.url(&format!("/schedules/{id}"), None)?;
         let res = self.client.delete(&url).send()?;
 
         if !res.status().is_success() {
@@ -478,11 +552,11 @@ impl PicusClient {
     // OpenAPI Fragments
     #[allow(dead_code)]
     pub fn list_openapi_fragments(&self, domain: Option<&str>) -> Result<Vec<OpenApiFragment>> {
-        let mut url = format!("{}/compute/openapi/fragments", self.base_url);
+        let mut url = self.url("/openapi/fragments", None)?;
         if let Some(d) = domain {
             url = format!("{}?domain={}", url, d);
         }
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -498,14 +572,14 @@ impl PicusClient {
         domain: String,
         fragment: serde_json::Value,
     ) -> Result<OpenApiFragment> {
-        let url = format!("{}/compute/openapi/fragments", self.base_url);
+        let url = self.url("/openapi/fragments", Some("/openapi/fragments"))?;
         let payload = CreateOpenApiFragmentRequest {
             function_id,
             domain,
             fragment,
         };
         let res = self
-            .request_builder(reqwest::Method::POST, &url)
+            .request_builder(reqwest::Method::POST, &url)?
             .json(&payload)
             .send()?;
 
@@ -519,8 +593,8 @@ impl PicusClient {
 
     #[allow(dead_code)]
     pub fn delete_openapi_fragment(&self, id: &str) -> Result<bool> {
-        let url = format!("{}/compute/openapi/fragments/{}", self.base_url, id);
-        let res = self.request_builder(reqwest::Method::DELETE, &url).send()?;
+        let url = self.url(&format!("/openapi/fragments/{id}"), None)?;
+        let res = self.request_builder(reqwest::Method::DELETE, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -532,8 +606,8 @@ impl PicusClient {
 
     #[allow(dead_code)]
     pub fn get_aggregated_spec(&self, domain: &str) -> Result<AggregatedSpec> {
-        let url = format!("{}/compute/openapi/{}.json", self.base_url, domain);
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let url = self.url(&format!("/openapi/{domain}.json"), None)?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -549,8 +623,8 @@ impl PicusClient {
 
     // Control Plane: list functions (returns UUID + function_key)
     pub fn list_compute_functions(&self) -> Result<Vec<ComputeFunction>> {
-        let url = format!("{}/compute/registry/functions", self.base_url);
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let url = self.url("/registry/functions", Some("/functions"))?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -562,8 +636,8 @@ impl PicusClient {
 
     // Route Bindings
     pub fn list_route_bindings(&self) -> Result<Vec<RouteBinding>> {
-        let url = format!("{}/compute/bindings/routes", self.base_url);
-        let res = self.request_builder(reqwest::Method::GET, &url).send()?;
+        let url = self.url("/bindings/routes", Some("/route-bindings"))?;
+        let res = self.request_builder(reqwest::Method::GET, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;
@@ -582,7 +656,7 @@ impl PicusClient {
         required_permissions: Option<Vec<String>>,
         source: Option<String>,
     ) -> Result<RouteBinding> {
-        let url = format!("{}/compute/bindings/routes", self.base_url);
+        let url = self.url("/bindings/routes", Some("/route-bindings"))?;
         let payload = CreateRouteBindingRequest {
             path_pattern,
             http_method: Some(http_method),
@@ -594,7 +668,7 @@ impl PicusClient {
             source,
         };
         let res = self
-            .request_builder(reqwest::Method::POST, &url)
+            .request_builder(reqwest::Method::POST, &url)?
             .json(&payload)
             .send()?;
 
@@ -606,10 +680,9 @@ impl PicusClient {
         Ok(res.json()?)
     }
 
-    #[allow(dead_code)]
     pub fn delete_route_binding(&self, id: &str) -> Result<bool> {
-        let url = format!("{}/compute/bindings/routes/{}", self.base_url, id);
-        let res = self.request_builder(reqwest::Method::DELETE, &url).send()?;
+        let url = self.url(&format!("/bindings/routes/{id}"), Some(&format!("/route-bindings/{id}")))?;
+        let res = self.request_builder(reqwest::Method::DELETE, &url)?.send()?;
 
         if !res.status().is_success() {
             let text = res.text()?;

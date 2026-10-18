@@ -15,6 +15,7 @@ pub struct CliProfile {
     pub url: Option<String>,
     pub executor_url: Option<String>,
     pub project_ref: Option<String>,
+    pub personal_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -23,6 +24,7 @@ pub struct CliDefaults {
     pub url: Option<String>,
     pub executor_url: Option<String>,
     pub project_ref: Option<String>,
+    pub personal_token: Option<String>,
     pub default_profile: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, CliProfile>,
@@ -94,6 +96,12 @@ impl CliDefaults {
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write CLI config at {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("Failed to restrict permissions on {}", path.display()))?;
+        }
 
         Ok(path)
     }

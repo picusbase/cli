@@ -24,15 +24,21 @@ picusbase --version
 
 ## Cấu hình
 
+Đăng nhập bằng personal access token (PAT `pbpat_...`, tạo tại Console → System Admin → Access Tokens). `--default-url` là URL Console gốc:
+
 ```bash
 picusbase config set \
   --profile default \
-  --default-url https://console.picusbase.com/api \
-  --default-executor-url https://console.picusbase.com \
-  --default-project-ref <project_ref>
+  --default-url http://console.picusbase.localhost \
+  --default-project-ref <project_ref> \
+  --personal-token <pbpat_...>
 
+picusbase config use default
 picusbase config show
+picusbase function list
 ```
+
+Có PAT, CLI đổi lấy access token và đi qua console-api. Không có PAT, `--default-url` là Compute Control Plane (`http://localhost:4080/api`, cần port-forward). Config file được ghi quyền 0600.
 
 Thứ tự ưu tiên resolve: flag CLI → biến môi trường `PICUS_*` → config file → default.
 
@@ -90,7 +96,17 @@ picusbase \
   function run --id <function-id> --params '{"key":"value"}'
 ```
 
-### 5. Jobs
+### 5. Route binding
+
+`deploy` tự tạo route từ `openapi.yaml`. Thêm/xoá thủ công:
+
+```bash
+picusbase route list
+picusbase route bind --function <function-id> --path /orders/{id} --method GET --auth-mode authenticated
+picusbase route delete --id <binding-id>
+```
+
+### 6. Jobs
 
 ```bash
 picusbase job create --function-id <function-id> --params '{"key":"value"}'
@@ -98,7 +114,7 @@ picusbase job list
 picusbase job delete --id <job-id>
 ```
 
-### 6. Schedules
+### 7. Schedules (chưa hỗ trợ khi dùng PAT)
 
 ```bash
 picusbase schedule create \
@@ -117,7 +133,8 @@ picusbase schedule delete --id <schedule-id>
 | `PICUS_URL` | Base URL của API |
 | `PICUS_PROJECT_REF` | Project ref mặc định |
 | `PICUS_EXECUTOR_URL` | URL của HTTP worker |
-| `PICUS_AUTH_TOKEN` | Bearer token |
+| `PICUS_PERSONAL_TOKEN` | Personal access token |
+| `PICUS_AUTH_TOKEN` | Bearer token cho `function run --executor-url` |
 | `PICUS_USER_ID` | User ID (dev bypass) |
 | `PICUS_PROFILE` | Profile được chọn |
 

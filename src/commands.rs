@@ -48,6 +48,9 @@ pub enum Commands {
     /// Manage Background Jobs
     #[command(alias = "jobs")]
     Job(JobArgs),
+    /// Manage HTTP route bindings of Compute Functions
+    #[command(alias = "routes")]
+    Route(RouteArgs),
     /// Manage Schedules
     #[command(alias = "schedules")]
     Schedule(ScheduleArgs),
@@ -664,6 +667,11 @@ pub enum ConfigCommands {
         /// Default project ref written to the CLI config file
         #[arg(long)]
         default_project_ref: Option<String>,
+
+        /// Personal access token (pbpat_...) from Console → System Admin → Access Tokens.
+        /// When set, --default-url must be the Console URL (e.g. http://console.picusbase.localhost).
+        #[arg(long)]
+        personal_token: Option<String>,
     },
     /// Set or clear the default profile used when --profile is not provided
     Use {
@@ -826,7 +834,7 @@ pub enum FunctionCommands {
     },
     /// Delete a function
     Delete {
-        /// Function ID to delete
+        /// Function ID (picus.toml `id`) or registry UUID
         #[arg(long)]
         id: String,
     },
@@ -854,6 +862,42 @@ pub enum JobCommands {
     /// Delete a job
     Delete {
         /// Job ID to delete
+        #[arg(long)]
+        id: String,
+    },
+}
+
+#[derive(Parser)]
+pub struct RouteArgs {
+    #[command(subcommand)]
+    pub command: RouteCommands,
+}
+
+#[derive(Subcommand)]
+pub enum RouteCommands {
+    /// List route bindings of the project
+    List,
+    /// Bind an HTTP route to a function (upserts on path + method)
+    Bind {
+        /// Function ID (picus.toml `id`)
+        #[arg(long)]
+        function: String,
+        /// Path pattern, e.g. /orders/{id}
+        #[arg(long)]
+        path: String,
+        /// HTTP method
+        #[arg(long, default_value = "POST")]
+        method: String,
+        /// none | authenticated | authorized
+        #[arg(long, default_value = "authenticated")]
+        auth_mode: String,
+        /// Required permission key (repeatable), checked when auth_mode = authorized
+        #[arg(long = "permission")]
+        permissions: Vec<String>,
+    },
+    /// Delete a route binding
+    Delete {
+        /// Route binding ID (from `picusbase route list`)
         #[arg(long)]
         id: String,
     },
