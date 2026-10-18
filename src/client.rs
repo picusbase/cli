@@ -451,8 +451,14 @@ impl PicusClient {
             return Ok(res.json()?);
         }
 
-        let url = self.url(&format!("/functions/{id}/run"), None)?;
-        let payload = RunFunctionRequest { params };
+        // PAT mode: proxy through console-api → dispatcher; include user context in body.
+        let console_path = format!("/functions/{id}/run");
+        let url = self.url(&format!("/functions/{id}/run"), Some(&console_path))?;
+        let payload = serde_json::json!({
+            "params": params,
+            "user_id": self.user_id,
+            "user_role": self.user_role,
+        });
 
         let res = self
             .request_builder(reqwest::Method::POST, &url)?
