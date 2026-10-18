@@ -16,10 +16,11 @@ Script tự phát hiện OS/arch và tải binary phù hợp (`macos-aarch64`, `
 cargo install --git https://github.com/picusbase/cli.git picusbase
 ```
 
-Kiểm tra sau khi cài:
+Kiểm tra và cập nhật lên phiên bản mới nhất:
 
 ```bash
 picusbase --version
+picusbase upgrade
 ```
 
 ## Cấu hình
