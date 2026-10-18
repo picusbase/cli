@@ -1157,6 +1157,85 @@ fn sync_route_bindings(client: &PicusClient, function_key: &str, spec: &serde_js
     }
 }
 
+fn is_newer_version(candidate: &str, current: &str) -> bool {
+    fn parse(v: &str) -> (u32, u32, u32) {
+        let p: Vec<&str> = v.split('.').collect();
+        let n = |i: usize| p.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+        (n(0), n(1), n(2))
+    }
+    parse(candidate) > parse(current)
+}
+
+fn run_upgrade() -> Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    println!("Current version: v{}", current);
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let platform = match (os, arch) {
+        ("linux", "x86_64") => "linux-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("macos", "aarch64") => "macos-aarch64",
+        _ => anyhow::bail!("Unsupported platform: {}-{}", os, arch),
+    };
+
+    println!("Checking latest release...");
+    let http = reqwest::blocking::Client::builder()
+        .user_agent("picusbase-cli")
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let release: serde_json::Value = http
+        .get("https://api.github.com/repos/picusbase/cli/releases/latest")
+        .send()
+        .context("Failed to reach GitHub API")?
+        .json()?;
+    let tag = release["tag_name"]
+        .as_str()
+        .context("Unexpected GitHub API response")?;
+    let latest = tag.trim_start_matches('v');
+
+    if !is_newer_version(latest, current) {
+        println!("Already up to date (v{}).", current);
+        return Ok(());
+    }
+    println!("Updating v{} → v{}...", current, latest);
+
+    let url = format!(
+        "https://github.com/picusbase/cli/releases/download/{}/picusbase-{}",
+        tag, platform
+    );
+    let mut resp = http.get(&url).send().context("Download failed")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("Download failed ({}): {}", resp.status(), url);
+    }
+
+    let current_exe = std::env::current_exe()?.canonicalize()?;
+    // Write to a temp file in the same directory to allow same-filesystem rename
+    let tmp_path = current_exe.with_file_name(".picusbase-upgrade-tmp");
+    {
+        let mut f = std::fs::File::create(&tmp_path).context("Cannot write to install directory")?;
+        resp.copy_to(&mut f)?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    std::fs::rename(&tmp_path, &current_exe).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        anyhow::anyhow!(
+            "Failed to replace binary ({}). Try: sudo picusbase upgrade",
+            e
+        )
+    })?;
+
+    println!("Updated to v{}. Run `picusbase --version` to confirm.", latest);
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cli_defaults = CliDefaults::load()?;
@@ -2807,6 +2886,7 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::Upgrade => run_upgrade(),
     }
 }
 

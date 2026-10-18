@@ -80,6 +80,8 @@ pub enum Commands {
     /// Manage PicusBase platform resources (organizations, projects)
     Platform(PlatformArgs),
 
+    /// Check for and install the latest CLI version
+    Upgrade,
 }
 
 // ── Platform commands ─────────────────────────────────────────────────────────
