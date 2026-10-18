@@ -68,6 +68,8 @@ pub enum Commands {
     /// Deploy and manage consumer apps on PicusBase infrastructure
     #[command(alias = "apps")]
     App(AppArgs),
+    /// Custom domains of project Apps (Console → Builder → Apps)
+    Domain(DomainArgs),
 
     /// Manage PicusBase platform resources (organizations, projects)
     Platform(PlatformArgs),
@@ -879,6 +881,30 @@ pub enum JobCommands {
         /// Job ID to delete
         #[arg(long)]
         id: String,
+    },
+}
+
+#[derive(Parser)]
+pub struct DomainArgs {
+    #[command(subcommand)]
+    pub command: DomainCommands,
+}
+
+#[derive(Subcommand)]
+pub enum DomainCommands {
+    /// List the project's Apps with their framework and domain
+    List,
+    /// Serve an App on a custom domain, or move it to a new one (no rebuild)
+    Set {
+        /// App code
+        app_code: String,
+        /// Full hostname, e.g. shop.example.com
+        domain: String,
+    },
+    /// Take an App off its domain (undeploys its container)
+    Remove {
+        /// App code
+        app_code: String,
     },
 }
 

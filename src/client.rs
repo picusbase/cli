@@ -478,8 +478,8 @@ impl PicusClient {
         Ok(res.json()?)
     }
 
-    /// `ui_framework` of an existing app, `None` if the app_code is free.
-    pub fn app_ui_framework(&self, project_ref: &str, app_code: &str) -> Result<Option<String>> {
+    /// `None` if the app_code is not registered in the project.
+    pub fn get_app(&self, project_ref: &str, app_code: &str) -> Result<Option<serde_json::Value>> {
         let res = self
             .client
             .get(format!("{}/platform/projects/{project_ref}/apps/{app_code}", self.base_url))
@@ -492,8 +492,33 @@ impl PicusClient {
             let status = res.status();
             anyhow::bail!("Failed to read app ({}): {}", status, res.text()?);
         }
-        let body: serde_json::Value = res.json()?;
-        Ok(Some(body.get("ui_framework").and_then(|v| v.as_str()).unwrap_or("dioxus").to_string()))
+        Ok(Some(res.json()?))
+    }
+
+    pub fn list_apps(&self, project_ref: &str) -> Result<Vec<serde_json::Value>> {
+        let res = self
+            .client
+            .get(format!("{}/platform/projects/{project_ref}/apps", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to list apps ({}): {}", status, res.text()?);
+        }
+        Ok(res.json()?)
+    }
+
+    pub fn undeploy_app(&self, project_ref: &str, app_code: &str) -> Result<()> {
+        let res = self
+            .client
+            .delete(format!("{}/platform/projects/{project_ref}/apps/{app_code}/deploy", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to undeploy app ({}): {}", status, res.text()?);
+        }
+        Ok(())
     }
 
     /// Registers (or updates) the app in the project, same endpoint as App Studio's "+ New App".
@@ -531,7 +556,8 @@ impl PicusClient {
             .ok_or_else(|| anyhow::anyhow!("upload response has no checksum: {body}"))
     }
 
-    pub fn deploy_app(&self, project_ref: &str, app_code: &str, domain: &str, bundle_checksum: &str) -> Result<serde_json::Value> {
+    /// `bundle_checksum: None` = server uses the app's latest bundle (react) or its pages (dioxus).
+    pub fn deploy_app(&self, project_ref: &str, app_code: &str, domain: &str, bundle_checksum: Option<&str>) -> Result<serde_json::Value> {
         let res = self
             .client
             .post(format!("{}/platform/projects/{project_ref}/apps/{app_code}/deploy", self.base_url))

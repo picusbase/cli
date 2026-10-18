@@ -183,6 +183,96 @@ fn wait_until_serving(url: &str, expected_index: &str) -> bool {
     false
 }
 
+fn require_project_ref(project_ref: Option<&str>) -> Result<&str> {
+    project_ref.context("project_ref is required: --project-ref, PICUS_PROJECT_REF or `picusbase config set --default-project-ref`")
+}
+
+/// Waits until `url` serves this app's container (`/runtime-config.json` names the app).
+fn wait_until_app_served(url: &str, app_code: &str) -> bool {
+    let http = match reqwest::blocking::Client::builder().timeout(Duration::from_secs(5)).build() {
+        Ok(http) => http,
+        Err(_) => return false,
+    };
+    let config_url = format!("{}/runtime-config.json", url.trim_end_matches('/'));
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        let served = http
+            .get(&config_url)
+            .send()
+            .ok()
+            .filter(|res| res.status().is_success())
+            .and_then(|res| res.json::<serde_json::Value>().ok())
+            .is_some_and(|config| config.get("pinned_app_code").and_then(|v| v.as_str()) == Some(app_code));
+        if served {
+            return true;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    false
+}
+
+pub fn list_domains(client: &PicusClient, project_ref: Option<&str>) -> Result<()> {
+    let project_ref = require_project_ref(project_ref)?;
+    let apps = client.list_apps(project_ref)?;
+    if apps.is_empty() {
+        println!("No Apps in {project_ref}.");
+        return Ok(());
+    }
+    let text = |app: &serde_json::Value, key: &str| app.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let rows: Vec<[String; 4]> = apps
+        .iter()
+        .map(|app| {
+            let domain = text(app, "domain");
+            [
+                text(app, "app_code"),
+                text(app, "app_name"),
+                text(app, "ui_framework"),
+                if domain.is_empty() { "-".to_string() } else { format!("http://{domain}/") },
+            ]
+        })
+        .collect();
+    let header = ["APP_CODE", "NAME", "FRAMEWORK", "URL"];
+    let widths: Vec<usize> = (0..4)
+        .map(|i| rows.iter().map(|r| r[i].chars().count()).chain([header[i].len()]).max().unwrap_or(0))
+        .collect();
+    let line = |cells: [&str; 4]| {
+        cells.iter().zip(&widths).map(|(c, w)| format!("{c:<w$}")).collect::<Vec<_>>().join("  ").trim_end().to_string()
+    };
+    println!("{}", line(header));
+    for row in &rows {
+        println!("{}", line([&row[0], &row[1], &row[2], &row[3]]));
+    }
+    Ok(())
+}
+
+pub fn set_domain(client: &PicusClient, project_ref: Option<&str>, app_code: &str, domain: &str) -> Result<()> {
+    let project_ref = require_project_ref(project_ref)?;
+    let domain = domain.trim().trim_end_matches('.').to_lowercase();
+    let app = client
+        .get_app(project_ref, app_code)?
+        .with_context(|| format!("App '{app_code}' is not registered in {project_ref} (see `picusbase domain list`)"))?;
+    let previous = app.get("domain").and_then(|v| v.as_str()).map(str::to_string);
+    println!("🚀 {} '{app_code}' → {domain}...", if previous.is_some() { "Moving" } else { "Deploying" });
+    let result = client.deploy_app(project_ref, app_code, &domain, None)?;
+    let url = result.get("url").and_then(|v| v.as_str()).map(str::to_string).unwrap_or_else(|| format!("http://{domain}/"));
+    if wait_until_app_served(&url, app_code) {
+        println!("✅ {url}");
+    } else {
+        println!("⚠️  Deployed, but {url} is not serving yet — DNS for {domain} must point at the cluster ingress");
+    }
+    if let Some(previous) = previous.filter(|previous| previous != &domain) {
+        println!("   {previous} no longer serves this app");
+    }
+    Ok(())
+}
+
+pub fn remove_domain(client: &PicusClient, project_ref: Option<&str>, app_code: &str) -> Result<()> {
+    let project_ref = require_project_ref(project_ref)?;
+    client.undeploy_app(project_ref, app_code)?;
+    println!("✅ '{app_code}' undeployed — `picusbase domain set {app_code} <domain>` brings it back");
+    Ok(())
+}
+
 pub fn deploy_app(
     client: &PicusClient,
     fallback_project_ref: Option<&str>,
@@ -201,7 +291,14 @@ pub fn deploy_app(
     let project_ref = non_empty(manifest.app.project_ref)
         .or_else(|| fallback_project_ref.map(str::to_string))
         .context("project_ref is required: set [app].project_ref in picus.app.toml or --project-ref")?;
+    let existing = client.get_app(&project_ref, &code)?;
+    let live_domain = existing
+        .as_ref()
+        .and_then(|app| app.get("domain").and_then(|v| v.as_str()))
+        .map(str::to_string);
+    // A domain set later (`picusbase domain set`, Console) wins over the one in picus.app.toml.
     let domain = domain_override
+        .or(live_domain)
         .or_else(|| non_empty(manifest.app.domain))
         .context("domain is required: set [app].domain in picus.app.toml or pass --domain")?;
 
@@ -221,16 +318,17 @@ pub fn deploy_app(
     }
     let name = non_empty(manifest.app.name).unwrap_or_else(|| code.clone());
     let framework = non_empty(manifest.app.framework).unwrap_or_else(|| "react".to_string());
-    if let Some(existing) = client.app_ui_framework(&project_ref, &code)? {
-        if existing != framework {
-            bail!("App code '{code}' is already used by a {existing} app in {project_ref} — pick another [app].code");
+    if let Some(app) = &existing {
+        let existing_framework = app.get("ui_framework").and_then(|v| v.as_str()).unwrap_or("dioxus");
+        if existing_framework != framework {
+            bail!("App code '{code}' is already used by a {existing_framework} app in {project_ref} — pick another [app].code");
         }
     }
     client.define_app(&project_ref, &code, &name, &framework)?;
     println!("📤 Uploading bundle ({} KB)...", bundle.len() / 1024);
     let checksum = client.upload_app_bundle(&project_ref, &code, bundle)?;
     println!("🚀 Deploying '{code}' to {domain} (project {project_ref})...");
-    let result = client.deploy_app(&project_ref, &code, &domain, &checksum)?;
+    let result = client.deploy_app(&project_ref, &code, &domain, Some(&checksum))?;
     let url = result
         .get("url")
         .and_then(|v| v.as_str())

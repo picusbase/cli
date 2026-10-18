@@ -13,7 +13,7 @@ use clap::Parser;
 use client::{PicusClient, PublishExtras};
 use commands::{
     AppCommands, AppFunctionsCommands, BundleCommands, Cli,
-    ClusterCommands, Commands, ConfigCommands, DeployCommands, DevCommands, FunctionCommands,
+    ClusterCommands, Commands, ConfigCommands, DeployCommands, DevCommands, DomainCommands, FunctionCommands,
     InitCommands, JobCommands, PlatformCommands, RouteCommands, ScheduleCommands,
 };
 use config::{CliDefaults, CliProfile, PicusConfig};
@@ -1558,6 +1558,14 @@ fn main() -> Result<()> {
                 Ok(())
             }
         },
+        Commands::Domain(args) => {
+            let project_ref = resolved_project_ref.as_deref();
+            match args.command {
+                DomainCommands::List => web_app::list_domains(&client, project_ref),
+                DomainCommands::Set { app_code, domain } => web_app::set_domain(&client, project_ref, &app_code, &domain),
+                DomainCommands::Remove { app_code } => web_app::remove_domain(&client, project_ref, &app_code),
+            }
+        }
         Commands::Deploy(args) => match args.command {
             DeployCommands::App { path, domain, skip_build } => {
                 web_app::deploy_app(&client, resolved_project_ref.as_deref(), &path, domain, skip_build)
