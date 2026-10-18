@@ -141,16 +141,6 @@ fn resolve_cli_auth_token(cli_auth_token: Option<String>) -> Option<String> {
         .or_else(|| normalize_optional_string(std::env::var("PICUS_AUTH_TOKEN").ok()))
 }
 
-fn resolve_cli_user_id(cli_user_id: Option<String>) -> Option<String> {
-    normalize_optional_string(cli_user_id)
-        .or_else(|| normalize_optional_string(std::env::var("PICUS_USER_ID").ok()))
-}
-
-fn resolve_cli_user_role(cli_user_role: Option<String>) -> Option<String> {
-    normalize_optional_string(cli_user_role)
-        .or_else(|| normalize_optional_string(std::env::var("PICUS_USER_ROLE").ok()))
-}
-
 fn find_functions_root(path: &Path) -> Option<&Path> {
     path.ancestors()
         .find(|ancestor| ancestor.file_name().and_then(|name| name.to_str()) == Some("functions"))
@@ -892,14 +882,7 @@ pub(crate) fn deploy_function_dir(
 
     // Determine effective project_ref
     let project_ref = cli_project_ref.or(config.function.project_ref.clone());
-    let client = PicusClient::new(
-        client_base_url.to_string(),
-        project_ref.clone(),
-        None,
-        None,
-        None,
-        None,
-    )
+    let client = PicusClient::new(client_base_url.to_string(), project_ref.clone(), None, None)
     .with_personal_token(personal_token);
 
     // Keep a single shared target under picus-erp/functions/target even when
@@ -1264,15 +1247,11 @@ fn main() -> Result<()> {
         resolve_cli_executor_url(cli.executor_url.clone(), &cli_defaults, selected_profile);
     let resolved_auth_token = resolve_cli_auth_token(cli.auth_token.clone());
     let resolved_personal_token = resolve_cli_personal_token(&cli_defaults, selected_profile);
-    let resolved_user_id = resolve_cli_user_id(cli.user_id.clone());
-    let resolved_user_role = resolve_cli_user_role(cli.user_role.clone());
     let client = PicusClient::new(
         resolved_url.clone(),
         resolved_project_ref.clone(),
         resolved_executor_url.clone(),
         resolved_auth_token.clone(),
-        resolved_user_id.clone(),
-        resolved_user_role.clone(),
     )
     .with_personal_token(resolved_personal_token.clone());
 

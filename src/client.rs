@@ -140,11 +140,6 @@ struct CreateJobRequest {
 }
 
 #[derive(Serialize)]
-struct RunFunctionRequest {
-    params: serde_json::Value,
-}
-
-#[derive(Serialize)]
 struct CreateScheduleRequest {
     name: String,
     cron_expression: String,
@@ -191,8 +186,6 @@ pub struct PicusClient {
     project_ref: Option<String>,
     executor_url: Option<String>,
     auth_token: Option<String>,
-    user_id: Option<String>,
-    user_role: Option<String>,
     personal_token: Option<String>,
     console_token: std::sync::OnceLock<String>,
 }
@@ -203,8 +196,6 @@ impl PicusClient {
         project_ref: Option<String>,
         executor_url: Option<String>,
         auth_token: Option<String>,
-        user_id: Option<String>,
-        user_role: Option<String>,
     ) -> Self {
         Self {
             client: Client::new(),
@@ -212,8 +203,6 @@ impl PicusClient {
             project_ref,
             executor_url,
             auth_token,
-            user_id,
-            user_role,
             personal_token: None,
             console_token: std::sync::OnceLock::new(),
         }
@@ -416,58 +405,74 @@ impl PicusClient {
         Ok(res.json()?)
     }
 
-    pub fn run_function(&self, id: &str, params: serde_json::Value) -> Result<serde_json::Value> {
-        if let Some(ref executor_url) = self.executor_url {
-            let url = format!(
-                "{}/functions/{}/execute",
-                executor_url.trim_end_matches('/'),
-                id
-            );
-            let mut req = self.client.post(&url).json(&params);
+    /// `executor_url` if set, else the Console URL with its `console.` host label swapped for
+    /// `functions.` (console.picusbase.localhost → functions.picusbase.localhost).
+    fn functions_url(&self) -> Result<String> {
+        if let Some(ref url) = self.executor_url {
+            return Ok(url.trim_end_matches('/').to_string());
+        }
+        let base = self.base_url.trim_end_matches('/');
+        let (scheme, rest) = base.split_once("://").unwrap_or(("https", base));
+        let authority = rest.split('/').next().unwrap_or(rest);
+        match authority.strip_prefix("console.") {
+            Some(host) => Ok(format!("{scheme}://functions.{host}")),
+            None => anyhow::bail!(
+                "Cannot derive the functions URL from '{}': set --executor-url, PICUS_EXECUTOR_URL or `picusbase config set --default-executor-url https://functions.<domain>`",
+                self.base_url
+            ),
+        }
+    }
 
-            if let Some(ref project_ref) = self.project_ref {
-                req = req.header("x-project-ref", project_ref);
-            }
-
-            if let Some(ref auth_token) = self.auth_token {
-                req = req.header("authorization", format!("Bearer {}", auth_token));
-            }
-
-            if let Some(ref user_id) = self.user_id {
-                req = req.header("x-picus-user-id", user_id);
-            }
-
-            if let Some(ref user_role) = self.user_role {
-                req = req.header("x-picus-user-role", user_role);
-            }
-
-            let res = req.send()?;
-
-            if !res.status().is_success() {
-                let text = res.text()?;
-                anyhow::bail!("Failed to run function: {}", text);
-            }
-
-            return Ok(res.json()?);
+    /// Dispatcher only accepts RS256 JWTs with audience `compute`, scoped to one project.
+    fn compute_token(&self, project_ref: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
         }
 
-        // PAT mode: proxy through console-api → dispatcher; include user context in body.
-        let console_path = format!("/functions/{id}/run");
-        let url = self.url(&format!("/functions/{id}/run"), Some(&console_path))?;
-        let payload = serde_json::json!({
-            "params": params,
-            "user_id": self.user_id,
-            "user_role": self.user_role,
-        });
-
         let res = self
-            .request_builder(reqwest::Method::POST, &url)?
-            .json(&payload)
+            .client
+            .post(format!("{}/api/auth/token/exchange", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .header("x-project-ref", project_ref)
+            .json(&serde_json::json!({
+                "target_project_ref": project_ref,
+                "target_audience": "compute",
+            }))
             .send()?;
-
         if !res.status().is_success() {
-            let text = res.text()?;
-            anyhow::bail!("Failed to run function: {}", text);
+            let status = res.status();
+            anyhow::bail!("Compute token exchange failed ({}): {}", status, res.text()?);
+        }
+        Ok(res.json::<TokenResponse>()?.access_token)
+    }
+
+    pub fn run_function(&self, id: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        let project_ref = self.project_ref.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "project_ref is required: --project-ref, PICUS_PROJECT_REF or `picusbase config set --default-project-ref`"
+            )
+        })?;
+        let url = format!("{}/functions/{}/execute", self.functions_url()?, id);
+        let token = match (&self.auth_token, &self.personal_token) {
+            (Some(token), _) => Some(token.clone()),
+            (None, Some(_)) => Some(self.compute_token(project_ref)?),
+            (None, None) => None,
+        };
+
+        let mut req = self
+            .client
+            .post(&url)
+            .header("x-project-ref", project_ref)
+            .json(&params);
+        if let Some(token) = token {
+            req = req.bearer_auth(token);
+        }
+
+        let res = req.send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to run function ({}): {}", status, res.text()?);
         }
 
         Ok(res.json()?)

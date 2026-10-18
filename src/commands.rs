@@ -17,7 +17,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub url: Option<String>,
 
-    /// HTTP executor URL override for route-based function execution
+    /// Functions endpoint URL for `function run` (default: --url with `console.` → `functions.`)
     #[arg(long, global = true)]
     pub executor_url: Option<String>,
 
@@ -25,17 +25,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub project_ref: Option<String>,
 
-    /// Bearer token used for authenticated HTTP worker execution
+    /// Compute-audience bearer token for `function run` (skips the PAT exchange)
     #[arg(long, global = true)]
     pub auth_token: Option<String>,
-
-    /// Explicit actor user ID for backend smoke execution lanes
-    #[arg(long, global = true)]
-    pub user_id: Option<String>,
-
-    /// Explicit actor role for backend smoke execution lanes
-    #[arg(long, global = true)]
-    pub user_role: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -654,7 +646,7 @@ pub enum ConfigCommands {
         #[arg(long)]
         default_url: Option<String>,
 
-        /// Default HTTP executor URL written to the CLI config file
+        /// Default functions endpoint URL written to the CLI config file
         #[arg(long)]
         default_executor_url: Option<String>,
 
