@@ -32,6 +32,10 @@ struct AppManifest {
 struct AppSection {
     code: String,
     #[serde(default)]
+    name: String,
+    #[serde(default)]
+    framework: String,
+    #[serde(default)]
     project_ref: String,
     #[serde(default)]
     domain: String,
@@ -215,6 +219,14 @@ pub fn deploy_app(
     if bundle.len() > MAX_BUNDLE_BYTES {
         bail!("Bundle is {} bytes, over the {MAX_BUNDLE_BYTES}-byte limit", bundle.len());
     }
+    let name = non_empty(manifest.app.name).unwrap_or_else(|| code.clone());
+    let framework = non_empty(manifest.app.framework).unwrap_or_else(|| "react".to_string());
+    if let Some(existing) = client.app_ui_framework(&project_ref, &code)? {
+        if existing != framework {
+            bail!("App code '{code}' is already used by a {existing} app in {project_ref} — pick another [app].code");
+        }
+    }
+    client.define_app(&project_ref, &code, &name, &framework)?;
     println!("📤 Uploading bundle ({} KB)...", bundle.len() / 1024);
     let checksum = client.upload_app_bundle(&project_ref, &code, bundle)?;
     println!("🚀 Deploying '{code}' to {domain} (project {project_ref})...");

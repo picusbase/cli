@@ -478,6 +478,39 @@ impl PicusClient {
         Ok(res.json()?)
     }
 
+    /// `ui_framework` of an existing app, `None` if the app_code is free.
+    pub fn app_ui_framework(&self, project_ref: &str, app_code: &str) -> Result<Option<String>> {
+        let res = self
+            .client
+            .get(format!("{}/platform/projects/{project_ref}/apps/{app_code}", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .send()?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to read app ({}): {}", status, res.text()?);
+        }
+        let body: serde_json::Value = res.json()?;
+        Ok(Some(body.get("ui_framework").and_then(|v| v.as_str()).unwrap_or("dioxus").to_string()))
+    }
+
+    /// Registers (or updates) the app in the project, same endpoint as App Studio's "+ New App".
+    pub fn define_app(&self, project_ref: &str, app_code: &str, app_name: &str, ui_framework: &str) -> Result<()> {
+        let res = self
+            .client
+            .post(format!("{}/platform/projects/{project_ref}/apps", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .json(&serde_json::json!({ "app_code": app_code, "app_name": app_name, "ui_framework": ui_framework }))
+            .send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to register app ({}): {}", status, res.text()?);
+        }
+        Ok(())
+    }
+
     /// Returns the bundle checksum to pass to `deploy_app`.
     pub fn upload_app_bundle(&self, project_ref: &str, app_code: &str, bundle: Vec<u8>) -> Result<String> {
         let res = self
