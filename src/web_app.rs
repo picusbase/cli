@@ -1,0 +1,234 @@
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use crate::client::PicusClient;
+
+const MAX_BUNDLE_BYTES: usize = 15 * 1024 * 1024;
+
+const REACT_TEMPLATE: &[(&str, &str)] = &[
+    ("picus.app.toml", include_str!("templates/react/picus.app.toml")),
+    ("package.json", include_str!("templates/react/package.json")),
+    ("vite.config.ts", include_str!("templates/react/vite.config.ts")),
+    ("tsconfig.json", include_str!("templates/react/tsconfig.json")),
+    ("index.html", include_str!("templates/react/index.html")),
+    ("runtime-config.dev.json", include_str!("templates/react/runtime-config.dev.json")),
+    (".gitignore", include_str!("templates/react/gitignore")),
+    ("src/main.tsx", include_str!("templates/react/src/main.tsx")),
+    ("src/App.tsx", include_str!("templates/react/src/App.tsx")),
+    ("src/index.css", include_str!("templates/react/src/index.css")),
+    ("src/picusbase.ts", include_str!("templates/react/src/picusbase.ts")),
+];
+
+#[derive(Deserialize)]
+struct AppManifest {
+    app: AppSection,
+    build: BuildSection,
+}
+
+#[derive(Deserialize)]
+struct AppSection {
+    code: String,
+    #[serde(default)]
+    project_ref: String,
+    #[serde(default)]
+    domain: String,
+}
+
+#[derive(Deserialize)]
+struct BuildSection {
+    command: String,
+    output: String,
+}
+
+fn validate_code(code: &str) -> Result<()> {
+    let valid = code.len() <= 63
+        && code.starts_with(|c: char| c.is_ascii_lowercase())
+        && code.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !valid {
+        bail!("App code '{code}' must start with a lowercase letter and contain only a-z, 0-9, '_' (max 63)");
+    }
+    Ok(())
+}
+
+fn non_empty(value: String) -> Option<String> {
+    Some(value).filter(|v| !v.trim().is_empty())
+}
+
+fn console_host(console_url: &str) -> &str {
+    let rest = console_url.split_once("://").map(|(_, rest)| rest).unwrap_or(console_url);
+    let authority = rest.split('/').next().unwrap_or(rest);
+    authority.split(':').next().unwrap_or(authority)
+}
+
+pub fn init_app(
+    client: &PicusClient,
+    project_ref: Option<&str>,
+    code: &str,
+    framework: &str,
+    name: &str,
+    domain: Option<String>,
+    dir: Option<PathBuf>,
+) -> Result<()> {
+    if framework != "react" {
+        bail!("Unsupported framework '{framework}' (supported: react)");
+    }
+    validate_code(code)?;
+    if name.contains(['<', '>', '{', '}', '"', '\\']) {
+        bail!("App name must not contain < > {{ }} \" or \\");
+    }
+    let project_ref = project_ref.context(
+        "project_ref is required: --project-ref, PICUS_PROJECT_REF or `picusbase config set --default-project-ref`",
+    )?;
+    let kebab = code.replace('_', "-");
+    let console_url = client.base_url().trim_end_matches('/');
+    let domain = domain.unwrap_or_else(|| {
+        if console_host(console_url).ends_with(".localhost") {
+            format!("{kebab}.picus.localhost")
+        } else {
+            String::new()
+        }
+    });
+    let functions_url = client.functions_url().unwrap_or_default();
+    let dir = dir.unwrap_or_else(|| PathBuf::from(&kebab));
+    if dir.exists() && dir.read_dir()?.next().is_some() {
+        bail!("{} already exists and is not empty", dir.display());
+    }
+
+    for (relative, content) in REACT_TEMPLATE {
+        let target = dir.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let rendered = content
+            .replace("{{APP_CODE}}", code)
+            .replace("{{APP_NAME}}", name)
+            .replace("{{PACKAGE_NAME}}", &kebab)
+            .replace("{{PROJECT_REF}}", project_ref)
+            .replace("{{DOMAIN}}", &domain)
+            .replace("{{CONSOLE_URL}}", console_url)
+            .replace("{{FUNCTIONS_URL}}", &functions_url);
+        std::fs::write(&target, rendered).with_context(|| format!("Failed to write {}", target.display()))?;
+    }
+
+    println!("✅ Created React + Vite app '{code}' in {}", dir.display());
+    println!("   cd {}", dir.display());
+    println!("   npm install && npm run dev      # local preview");
+    println!("   picusbase deploy app            # build + deploy{}", if domain.is_empty() { " (set [app].domain in picus.app.toml first)".to_string() } else { format!(" to http://{domain}") });
+    Ok(())
+}
+
+fn run_shell(dir: &Path, command: &str) -> Result<()> {
+    println!("$ {command}");
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.args(["/C", command]);
+        c
+    } else {
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
+        c
+    };
+    let status = cmd.current_dir(dir).status().with_context(|| format!("Failed to run `{command}`"))?;
+    if !status.success() {
+        bail!("`{command}` failed ({status})");
+    }
+    Ok(())
+}
+
+fn pack_dir(dir: &Path) -> Result<Vec<u8>> {
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    archive.append_dir_all(".", dir)?;
+    Ok(archive.into_inner()?.finish()?)
+}
+
+/// The host injects `<script>window.__PICUS_CONFIG__=…</script>` into index.html.
+fn strip_injected_config(html: &str) -> String {
+    const MARKER: &str = "<script>window.__PICUS_CONFIG__=";
+    match html.find(MARKER).and_then(|start| html[start..].find("</script>").map(|end| (start, start + end + 9))) {
+        Some((start, end)) => format!("{}{}", &html[..start], &html[end..]),
+        None => html.to_string(),
+    }
+}
+
+/// Waits until the domain serves this build's index.html (a redeploy keeps the old pod serving
+/// until the rollout finishes).
+fn wait_until_serving(url: &str, expected_index: &str) -> bool {
+    let http = match reqwest::blocking::Client::builder().timeout(Duration::from_secs(5)).build() {
+        Ok(http) => http,
+        Err(_) => return false,
+    };
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        let served = http
+            .get(url)
+            .header("accept", "text/html")
+            .send()
+            .ok()
+            .filter(|res| res.status().is_success())
+            .and_then(|res| res.text().ok())
+            .is_some_and(|html| strip_injected_config(&html) == expected_index);
+        if served {
+            return true;
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    false
+}
+
+pub fn deploy_app(
+    client: &PicusClient,
+    fallback_project_ref: Option<&str>,
+    path: &Path,
+    domain_override: Option<String>,
+    skip_build: bool,
+) -> Result<()> {
+    let manifest_path = path.join("picus.app.toml");
+    let manifest: AppManifest = toml::from_str(
+        &std::fs::read_to_string(&manifest_path)
+            .with_context(|| format!("{} not found — run inside an app created by `picusbase init app`", manifest_path.display()))?,
+    )
+    .with_context(|| format!("Invalid {}", manifest_path.display()))?;
+    let code = manifest.app.code;
+    validate_code(&code)?;
+    let project_ref = non_empty(manifest.app.project_ref)
+        .or_else(|| fallback_project_ref.map(str::to_string))
+        .context("project_ref is required: set [app].project_ref in picus.app.toml or --project-ref")?;
+    let domain = domain_override
+        .or_else(|| non_empty(manifest.app.domain))
+        .context("domain is required: set [app].domain in picus.app.toml or pass --domain")?;
+
+    if !skip_build {
+        if !path.join("node_modules").exists() {
+            run_shell(path, "npm install")?;
+        }
+        run_shell(path, &manifest.build.command)?;
+    }
+    let output = path.join(&manifest.build.output);
+    let expected_index = std::fs::read_to_string(output.join("index.html"))
+        .with_context(|| format!("{} not found — the build did not produce index.html", output.join("index.html").display()))?;
+
+    let bundle = pack_dir(&output)?;
+    if bundle.len() > MAX_BUNDLE_BYTES {
+        bail!("Bundle is {} bytes, over the {MAX_BUNDLE_BYTES}-byte limit", bundle.len());
+    }
+    println!("📤 Uploading bundle ({} KB)...", bundle.len() / 1024);
+    let checksum = client.upload_app_bundle(&project_ref, &code, bundle)?;
+    println!("🚀 Deploying '{code}' to {domain} (project {project_ref})...");
+    let result = client.deploy_app(&project_ref, &code, &domain, &checksum)?;
+    let url = result
+        .get("url")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("http://{domain}/"));
+
+    if wait_until_serving(&url, &expected_index) {
+        println!("✅ {url}");
+    } else {
+        println!("⚠️  Deployed, but {url} is not serving yet — check `kubectl get pods -n picusbase | grep app-`");
+    }
+    Ok(())
+}

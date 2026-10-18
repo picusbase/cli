@@ -1,0 +1,8 @@
+{
+  "pinned_project_ref": "{{PROJECT_REF}}",
+  "pinned_app_code": "{{APP_CODE}}",
+  "pinned_oauth_client_id": null,
+  "console_api_url": "{{CONSOLE_URL}}",
+  "auth_api_url": "{{CONSOLE_URL}}/api",
+  "functions_url": "{{FUNCTIONS_URL}}"
+}

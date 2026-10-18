@@ -1,0 +1,10 @@
+[app]
+code = "{{APP_CODE}}"
+name = "{{APP_NAME}}"
+framework = "react"
+project_ref = "{{PROJECT_REF}}"
+domain = "{{DOMAIN}}"
+
+[build]
+command = "npm run build"
+output = "dist"

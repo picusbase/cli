@@ -6,6 +6,7 @@ mod commands;
 mod config;
 mod language;
 mod manifest;
+mod web_app;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -1558,6 +1559,9 @@ fn main() -> Result<()> {
             }
         },
         Commands::Deploy(args) => match args.command {
+            DeployCommands::App { path, domain, skip_build } => {
+                web_app::deploy_app(&client, resolved_project_ref.as_deref(), &path, domain, skip_build)
+            }
             DeployCommands::Functions {
                 path,
                 ids,
@@ -1827,6 +1831,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Commands::Init(args) => match args.command {
+            InitCommands::App { code, framework, name, domain, dir } => {
+                let name = name.unwrap_or_else(|| title_case(&code));
+                web_app::init_app(&client, resolved_project_ref.as_deref(), &code, &framework, &name, domain, dir)
+            }
             InitCommands::Functions {
                 domain,
                 function_id,

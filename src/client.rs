@@ -407,7 +407,7 @@ impl PicusClient {
 
     /// `executor_url` if set, else the Console URL with its `console.` host label swapped for
     /// `functions.` (console.picusbase.localhost → functions.picusbase.localhost).
-    fn functions_url(&self) -> Result<String> {
+    pub fn functions_url(&self) -> Result<String> {
         if let Some(ref url) = self.executor_url {
             return Ok(url.trim_end_matches('/').to_string());
         }
@@ -475,6 +475,40 @@ impl PicusClient {
             anyhow::bail!("Failed to run function ({}): {}", status, res.text()?);
         }
 
+        Ok(res.json()?)
+    }
+
+    /// Returns the bundle checksum to pass to `deploy_app`.
+    pub fn upload_app_bundle(&self, project_ref: &str, app_code: &str, bundle: Vec<u8>) -> Result<String> {
+        let res = self
+            .client
+            .put(format!("{}/platform/projects/{project_ref}/apps/{app_code}/bundle", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .header("content-type", "application/gzip")
+            .body(bundle)
+            .send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to upload app bundle ({}): {}", status, res.text()?);
+        }
+        let body: serde_json::Value = res.json()?;
+        body.get("checksum")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("upload response has no checksum: {body}"))
+    }
+
+    pub fn deploy_app(&self, project_ref: &str, app_code: &str, domain: &str, bundle_checksum: &str) -> Result<serde_json::Value> {
+        let res = self
+            .client
+            .post(format!("{}/platform/projects/{project_ref}/apps/{app_code}/deploy", self.base_url))
+            .bearer_auth(self.bearer_token()?)
+            .json(&serde_json::json!({ "domain": domain, "bundle_checksum": bundle_checksum }))
+            .send()?;
+        if !res.status().is_success() {
+            let status = res.status();
+            anyhow::bail!("Failed to deploy app ({}): {}", status, res.text()?);
+        }
         Ok(res.json()?)
     }
 

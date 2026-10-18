@@ -719,6 +719,23 @@ pub enum InitCommands {
         #[arg(long, default_value = "rust")]
         language: String,
     },
+    /// Scaffold a frontend app (React + Vite) wired to the project's entities and functions
+    App {
+        /// App code (lowercase letters, digits, `_`), e.g. demo_app
+        code: String,
+        /// Frontend framework (supported: react)
+        #[arg(long, default_value = "react")]
+        framework: String,
+        /// Display name
+        #[arg(long)]
+        name: Option<String>,
+        /// Domain the app is deployed to (default for local: <code>.picus.localhost)
+        #[arg(long)]
+        domain: Option<String>,
+        /// Target directory (default: ./<code with - instead of _>)
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Parser)]
@@ -764,6 +781,18 @@ pub enum DeployCommands {
         /// --signing-key-path is provided.
         #[arg(long)]
         signer_id: Option<String>,
+    },
+    /// Build a frontend app (picus.app.toml) and deploy it to its domain
+    App {
+        /// App directory containing picus.app.toml
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        /// Override the domain from picus.app.toml
+        #[arg(long)]
+        domain: Option<String>,
+        /// Deploy the existing build output without running the build command
+        #[arg(long, default_value_t = false)]
+        skip_build: bool,
     },
 }
 
