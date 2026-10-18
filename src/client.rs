@@ -224,6 +224,21 @@ impl PicusClient {
         self
     }
 
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Exchange the configured PAT for a short-lived bearer token.
+    /// Errors if no PAT is configured.
+    pub fn bearer_token(&self) -> Result<String> {
+        let pat = self.personal_token.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "personal_token is required: `picusbase config set --personal-token <pbpat_...>` or PICUS_PERSONAL_TOKEN"
+            )
+        })?;
+        self.console_token(pat)
+    }
+
     /// With a personal access token `base_url` is the Console URL and requests go through
     /// console-api's authenticated `/platform/projects/:ref/compute` proxy; otherwise straight to
     /// the Compute Control Plane. `console_path: None` marks an endpoint console-api does not proxy.

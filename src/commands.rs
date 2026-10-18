@@ -136,30 +136,22 @@ pub enum PlatformCommands {
         token: Option<String>,
     },
 
-    /// List organizations (requires --access-token or PICUS_ACCESS_TOKEN env)
+    /// List organizations (uses PICUS_PERSONAL_TOKEN from config)
     OrgList {
-        /// Console API base URL
+        /// Console API base URL (defaults to configured --default-url)
         #[arg(long)]
         console_url: Option<String>,
-
-        /// Bearer access token
-        #[arg(long)]
-        access_token: Option<String>,
     },
 
-    /// List projects (optionally filtered by org; requires --access-token)
+    /// List projects, optionally filtered by org (uses PICUS_PERSONAL_TOKEN from config)
     ProjectList {
         /// Filter by organization ID
         #[arg(long)]
         org_id: Option<String>,
 
-        /// Console API base URL
+        /// Console API base URL (defaults to configured --default-url)
         #[arg(long)]
         console_url: Option<String>,
-
-        /// Bearer access token
-        #[arg(long)]
-        access_token: Option<String>,
     },
 
     /// Show project provisioning status

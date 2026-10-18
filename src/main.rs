@@ -2811,9 +2811,9 @@ fn main() -> Result<()> {
                     Ok(())
                 }
 
-                PlatformCommands::OrgList { console_url, access_token } => {
-                    let base = console_url.as_deref().unwrap_or(DEFAULT_CONSOLE_URL);
-                    let tok = access_token.as_deref().unwrap_or("");
+                PlatformCommands::OrgList { console_url } => {
+                    let tok = client.bearer_token()?;
+                    let base = console_url.as_deref().unwrap_or_else(|| client.base_url());
                     let resp = reqwest::blocking::Client::new()
                         .get(format!("{}/platform/organizations", base))
                         .header("authorization", format!("Bearer {}", tok))
@@ -2824,7 +2824,7 @@ fn main() -> Result<()> {
                         .unwrap_or(serde_json::json!([]));
                     let orgs = json.as_array().cloned().unwrap_or_default();
                     if orgs.is_empty() {
-                        println!("No organizations found (or unauthorized).");
+                        println!("No organizations found.");
                     } else {
                         println!("{:<38}  {}", "ID", "Name");
                         println!("{}", "-".repeat(60));
@@ -2837,9 +2837,9 @@ fn main() -> Result<()> {
                     Ok(())
                 }
 
-                PlatformCommands::ProjectList { org_id, console_url, access_token } => {
-                    let base = console_url.as_deref().unwrap_or(DEFAULT_CONSOLE_URL);
-                    let tok = access_token.as_deref().unwrap_or("");
+                PlatformCommands::ProjectList { org_id, console_url } => {
+                    let tok = client.bearer_token()?;
+                    let base = console_url.as_deref().unwrap_or_else(|| client.base_url());
                     let url = if let Some(ref oid) = org_id {
                         format!("{}/platform/projects?organization_id={}", base, oid)
                     } else {
@@ -2855,8 +2855,7 @@ fn main() -> Result<()> {
                         .unwrap_or(serde_json::json!([]));
                     let projects = json.as_array().cloned().unwrap_or_default();
                     if projects.is_empty() {
-                        println!("No projects found (or unauthorized).");
-                        println!("Tip: pass --access-token or set PICUS_ACCESS_TOKEN for authenticated listing.");
+                        println!("No projects found.");
                     } else {
                         println!("{:<15}  {:<38}  {}", "project_ref", "organization_id", "name");
                         println!("{}", "-".repeat(80));
