@@ -5,7 +5,7 @@ CLI để scaffold, build, deploy và quản lý Compute Functions trên nền t
 ## Cài đặt
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/picusbase/cli/main/install.sh | sh
+curl -sSf https://raw.githubusercontent.com/picusbase/picusbase-cli/main/install.sh | sh
 ```
 
 Script tự phát hiện OS/arch và tải binary phù hợp (`macos-aarch64`, `macos-x86_64`, `linux-x86_64`, `linux-aarch64`).
@@ -13,7 +13,7 @@ Script tự phát hiện OS/arch và tải binary phù hợp (`macos-aarch64`, `
 **Build từ source** (cần Rust toolchain):
 
 ```bash
-cargo install --git https://github.com/picusbase/cli.git picusbase
+cargo install --git https://github.com/picusbase/picusbase-cli.git picusbase
 ```
 
 Kiểm tra và cập nhật lên phiên bản mới nhất:

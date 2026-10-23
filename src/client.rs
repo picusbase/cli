@@ -460,9 +460,11 @@ impl PicusClient {
             (None, None) => None,
         };
 
+        // Orchestrator functions (e.g. tenant provisioning) run for minutes — the client's default 30s would give up while they still finish.
         let mut req = self
             .client
             .post(&url)
+            .timeout(std::time::Duration::from_secs(15 * 60))
             .header("x-project-ref", project_ref)
             .json(&params);
         if let Some(token) = token {

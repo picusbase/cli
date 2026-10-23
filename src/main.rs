@@ -1173,7 +1173,7 @@ fn run_upgrade() -> Result<()> {
         .timeout(Duration::from_secs(30))
         .build()?;
     let release: serde_json::Value = http
-        .get("https://api.github.com/repos/picusbase/cli/releases/latest")
+        .get("https://api.github.com/repos/picusbase/picusbase-cli/releases/latest")
         .send()
         .context("Failed to reach GitHub API")?
         .json()?;
@@ -1189,7 +1189,7 @@ fn run_upgrade() -> Result<()> {
     println!("Updating v{} → v{}...", current, latest);
 
     let url = format!(
-        "https://github.com/picusbase/cli/releases/download/{}/picusbase-{}",
+        "https://github.com/picusbase/picusbase-cli/releases/download/{}/picusbase-{}",
         tag, platform
     );
     let mut resp = http.get(&url).send().context("Download failed")?;
