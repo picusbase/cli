@@ -40,6 +40,9 @@ pub enum Commands {
     /// Manage Background Jobs
     #[command(alias = "jobs")]
     Job(JobArgs),
+
+    /// Discover and call the console-api operations documented in the API spec
+    Api(ApiArgs),
     /// Manage HTTP route bindings of Compute Functions
     #[command(alias = "routes")]
     Route(RouteArgs),
@@ -908,6 +911,52 @@ pub enum FunctionCommands {
         /// Function ID (picus.toml `id`) or registry UUID
         #[arg(long)]
         id: String,
+    },
+}
+
+#[derive(Parser)]
+pub struct ApiArgs {
+    #[command(subcommand)]
+    pub command: ApiCommands,
+}
+
+#[derive(Subcommand)]
+pub enum ApiCommands {
+    /// List the documented operations (start here: the methods and paths are in this list)
+    List {
+        /// Only this HTTP method: GET, POST, PUT, PATCH or DELETE
+        #[arg(long)]
+        method: Option<String>,
+        /// Only operations whose id, path or summary contains this text
+        #[arg(long)]
+        filter: Option<String>,
+        /// Print JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one operation: summary, parameters, request body, permissions, responses
+    Describe {
+        /// operationId, e.g. get_project_dashboard
+        operation_id: String,
+    },
+    /// Call an operation with the profile's personal access token
+    Call {
+        /// HTTP method
+        method: String,
+        /// Path as listed by `picusbase api list`, e.g. /platform/projects/p_ab12cd34/dashboard
+        path: String,
+        /// Query parameter, repeatable: -q range=24h
+        #[arg(long = "query", short = 'q')]
+        query: Vec<String>,
+        /// JSON request body
+        #[arg(long)]
+        data: Option<String>,
+        /// Read the JSON request body from a file
+        #[arg(long, conflicts_with = "data")]
+        data_file: Option<PathBuf>,
+        /// Send a request that is not GET (without this flag it is only printed)
+        #[arg(long)]
+        yes: bool,
     },
 }
 

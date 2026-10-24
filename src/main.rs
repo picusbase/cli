@@ -1,3 +1,4 @@
+mod api;
 mod app_commands;
 mod app_config;
 mod bundler;
@@ -14,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use client::{PicusClient, PublishExtras};
 use commands::{
-    AppCommands, AppFunctionsCommands, BundleCommands, Cli,
+    ApiCommands, AppCommands, AppFunctionsCommands, BundleCommands, Cli,
     ClusterCommands, Commands, ConfigCommands, DataCommands, DeployCommands, DevCommands, DomainCommands, FunctionCommands,
     GenCommands,
     InitCommands, JobCommands, PlatformCommands, RouteCommands, ScheduleCommands,
@@ -1786,6 +1787,60 @@ fn main() -> Result<()> {
                         println!("Failed to delete function '{}'.", id);
                     }
                 }
+            }
+            Ok(())
+        }
+        Commands::Api(args) => {
+            match args.command {
+            ApiCommands::List { method, filter, json } => {
+                let ops = api::list(method.as_deref(), filter.as_deref())?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&ops)?);
+                } else {
+                    let rows: Vec<api::Row> = ops.into_iter().map(api::Row::from).collect();
+                    println!("{}", Table::new(rows));
+                }
+            }
+            ApiCommands::Describe { operation_id } => {
+                println!("{}", serde_json::to_string_pretty(&api::describe(&operation_id)?)?);
+            }
+            ApiCommands::Call { method, path, query, data, data_file, yes } => {
+                let body: Option<serde_json::Value> = match (data, data_file) {
+                    (Some(text), _) => Some(serde_json::from_str(&text).context("--data is not valid JSON")?),
+                    (None, Some(file)) => {
+                        let text = std::fs::read_to_string(&file)
+                            .with_context(|| format!("reading {}", file.display()))?;
+                        Some(serde_json::from_str(&text).context("--data-file is not valid JSON")?)
+                    }
+                    (None, None) => None,
+                };
+                let (op, full_path, query_string) =
+                    api::resolve(&method, &path, resolved_project_ref.as_deref(), &query)?;
+                let target = if query_string.is_empty() {
+                    full_path
+                } else {
+                    format!("{full_path}?{query_string}")
+                };
+                if op.method != "GET" && !yes {
+                    eprintln!(
+                        "Not sent: {} {} ({}; permissions: {}). Re-run with --yes to send.",
+                        op.method,
+                        target,
+                        op.operation_id,
+                        op.permissions.join(" ")
+                    );
+                    std::process::exit(2);
+                }
+                let (status, text) = client.send_api(&op.method, &target, body.as_ref())?;
+                if (200..300).contains(&status) {
+                    match serde_json::from_str::<serde_json::Value>(&text) {
+                        Ok(value) => println!("{}", serde_json::to_string_pretty(&value)?),
+                        Err(_) => println!("{text}"),
+                    }
+                } else {
+                    anyhow::bail!("HTTP {status}: {text}");
+                }
+            }
             }
             Ok(())
         }
