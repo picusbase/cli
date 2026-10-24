@@ -2827,69 +2827,34 @@ fn main() -> Result<()> {
         }
 
         Commands::Platform(args) => {
-            const DEFAULT_CONSOLE_URL: &str = "http://console.picusbase.localhost";
-            const DEFAULT_TOKEN: &str = "local-dev-internal-service-token";
-
             match args.command {
-                PlatformCommands::OrgCreate { name, user_id, console_url, token } => {
-                    let base = console_url.as_deref().unwrap_or(DEFAULT_CONSOLE_URL);
-                    let tok = token.as_deref().unwrap_or(DEFAULT_TOKEN);
-                    let body = serde_json::json!({ "org_name": name, "user_id": user_id });
-                    let resp = reqwest::blocking::Client::new()
-                        .post(format!("{}/platform/internal/organizations", base))
-                        .header("content-type", "application/json")
-                        .header("x-picus-internal-service-token", tok)
-                        .json(&body)
-                        .send()
-                        .context("Failed to call console-api")?;
-                    let status = resp.status();
-                    let text = resp.text().unwrap_or_default();
-                    if !status.is_success() {
-                        anyhow::bail!("org create failed ({}): {}", status, text);
+                PlatformCommands::OrgCreate { name } => {
+                    let body = serde_json::json!({ "display_name": name });
+                    let (status, text) = client.send_api("POST", "/platform/organizations", Some(&body))?;
+                    if !(200..300).contains(&status) {
+                        anyhow::bail!("org create failed (HTTP {status}): {text}");
                     }
-                    let json: serde_json::Value = serde_json::from_str(&text)
-                        .unwrap_or(serde_json::json!({"raw": text}));
-                    let org_id = json.get("organization_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("<unknown>");
+                    let json: serde_json::Value = serde_json::from_str(&text)?;
                     println!("Organization created.");
-                    println!("  organization_id : {}", org_id);
+                    println!("  organization_id : {}", json["id"].as_str().unwrap_or("<unknown>"));
                     println!("  name            : {}", name);
                     Ok(())
                 }
 
-                PlatformCommands::ProjectCreate { org_id, name, user_id, console_url, token } => {
-                    let base = console_url.as_deref().unwrap_or(DEFAULT_CONSOLE_URL);
-                    let tok = token.as_deref().unwrap_or(DEFAULT_TOKEN);
-                    let body = serde_json::json!({
-                        "organization_id": org_id,
-                        "project_name": name,
-                        "user_id": user_id
-                    });
-                    let resp = reqwest::blocking::Client::new()
-                        .post(format!("{}/platform/internal/projects", base))
-                        .header("content-type", "application/json")
-                        .header("x-picus-internal-service-token", tok)
-                        .json(&body)
-                        .send()
-                        .context("Failed to call console-api")?;
-                    let status = resp.status();
-                    let text = resp.text().unwrap_or_default();
-                    if !status.is_success() {
-                        anyhow::bail!("project create failed ({}): {}", status, text);
+                PlatformCommands::ProjectCreate { org_id, name } => {
+                    let body = serde_json::json!({ "name": name, "organization_id": org_id });
+                    let (status, text) = client.send_api("POST", "/platform/projects", Some(&body))?;
+                    if !(200..300).contains(&status) {
+                        anyhow::bail!("project create failed (HTTP {status}): {text}");
                     }
-                    let json: serde_json::Value = serde_json::from_str(&text)
-                        .unwrap_or(serde_json::json!({"raw": text}));
-                    let project_ref = json.get("project_ref")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("<unknown>");
+                    let json: serde_json::Value = serde_json::from_str(&text)?;
+                    let project_ref = json["project_ref"].as_str().unwrap_or("<unknown>");
                     println!("Project created. Provisioning may take a few seconds.");
                     println!("  project_ref     : {}", project_ref);
                     println!("  name            : {}", name);
                     println!("  organization_id : {}", org_id);
                     println!();
-                    println!("Next: wait ~5s then run migrations:");
-                    println!("  picusbase app migrate --config <app.toml> --project-ref {} --env local", project_ref);
+                    println!("Next: wait ~5s, then pass --project-ref {} to later commands.", project_ref);
                     Ok(())
                 }
 
@@ -2951,17 +2916,14 @@ fn main() -> Result<()> {
                     Ok(())
                 }
 
-                PlatformCommands::ProjectStatus { project_ref, console_url, token } => {
-                    let base = console_url.as_deref().unwrap_or(DEFAULT_CONSOLE_URL);
-                    let tok = token.as_deref().unwrap_or(DEFAULT_TOKEN);
-                    let resp = reqwest::blocking::Client::new()
-                        .get(format!("{}/platform/internal/projects/{}/status", base, project_ref))
-                        .header("x-picus-internal-service-token", tok)
-                        .send()
-                        .context("Failed to get project status")?;
-                    let text = resp.text().unwrap_or_default();
+                PlatformCommands::ProjectStatus { project_ref } => {
+                    let (status, text) = client.send_api("GET", &format!("/platform/projects/{project_ref}"), None)?;
+                    if !(200..300).contains(&status) {
+                        anyhow::bail!("project status failed (HTTP {status}): {text}");
+                    }
+                    let json: serde_json::Value = serde_json::from_str(&text)?;
                     println!("project_ref : {}", project_ref);
-                    println!("status      : {}", text);
+                    println!("status      : {}", json["status"].as_str().unwrap_or("<unknown>"));
                     Ok(())
                 }
             }
