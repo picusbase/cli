@@ -240,7 +240,7 @@ impl PicusClient {
         })?;
         let project_ref = self.project_ref.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
-                "project_ref is required: --project-ref, PICUS_PROJECT_REF or `picusbase config set --default-project-ref`"
+                "project_ref is required: --project-ref or PICUS_PROJECT_REF"
             )
         })?;
         Ok(format!(
@@ -473,7 +473,7 @@ impl PicusClient {
     pub fn run_function(&self, id: &str, params: serde_json::Value) -> Result<serde_json::Value> {
         let project_ref = self.project_ref.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
-                "project_ref is required: --project-ref, PICUS_PROJECT_REF or `picusbase config set --default-project-ref`"
+                "project_ref is required: --project-ref or PICUS_PROJECT_REF"
             )
         })?;
         let url = format!("{}/functions/{}/execute", self.functions_url()?, id);
