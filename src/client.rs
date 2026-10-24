@@ -293,6 +293,29 @@ impl PicusClient {
         Ok(req)
     }
 
+    /// Sends one request to a console-api path, for `picusbase api call`. Needs a PAT.
+    pub fn send_api(
+        &self,
+        method: &str,
+        path_and_query: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<(u16, String)> {
+        if self.personal_token.is_none() {
+            anyhow::bail!(
+                "personal_token is required: `picusbase config set --personal-token <pbpat_...>` or PICUS_PERSONAL_TOKEN"
+            );
+        }
+        let method = reqwest::Method::from_bytes(method.as_bytes())?;
+        let url = format!("{}{}", self.base_url, path_and_query);
+        let mut req = self.request_builder(method, &url)?;
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let res = req.send()?;
+        let status = res.status().as_u16();
+        Ok((status, res.text()?))
+    }
+
     // Functions
     pub fn list_functions(&self) -> Result<Vec<Function>> {
         let url = self.url("/registry/functions", Some("/functions"))?;
