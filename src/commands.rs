@@ -95,26 +95,14 @@ pub struct PlatformArgs {
 
 #[derive(Subcommand)]
 pub enum PlatformCommands {
-    /// Create a new organization
+    /// Create an organization; the caller (the PAT's owner) becomes its owner
     OrgCreate {
         /// Organization display name
         #[arg(long)]
         name: String,
-
-        /// Admin user UUID (must already exist in system_auth project)
-        #[arg(long)]
-        user_id: String,
-
-        /// Console API base URL (default: http://console.picusbase.localhost)
-        #[arg(long)]
-        console_url: Option<String>,
-
-        /// Internal service token (default: local-dev-internal-service-token)
-        #[arg(long)]
-        token: Option<String>,
     },
 
-    /// Create a new project under an organization
+    /// Create a project under an organization (the caller needs owner or admin there)
     ProjectCreate {
         /// Organization ID (UUID)
         #[arg(long)]
@@ -123,18 +111,6 @@ pub enum PlatformCommands {
         /// Project display name
         #[arg(long)]
         name: String,
-
-        /// Admin user UUID
-        #[arg(long)]
-        user_id: String,
-
-        /// Console API base URL (default: http://console.picusbase.localhost)
-        #[arg(long)]
-        console_url: Option<String>,
-
-        /// Internal service token (default: local-dev-internal-service-token)
-        #[arg(long)]
-        token: Option<String>,
     },
 
     /// List organizations (uses PICUS_PERSONAL_TOKEN from config)
@@ -160,14 +136,6 @@ pub enum PlatformCommands {
         /// Project reference (e.g. p_5acd949e)
         #[arg(long)]
         project_ref: String,
-
-        /// Console API base URL
-        #[arg(long)]
-        console_url: Option<String>,
-
-        /// Internal service token
-        #[arg(long)]
-        token: Option<String>,
     },
 }
 
